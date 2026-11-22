@@ -1,0 +1,15 @@
+# 工具链缓存（工作区内，见 ENVIRONMENT.md）
+.cache/
+# 构建产物
+bin/
+dist/
+# 运行时数据：仅有 library/ 需要备份，但都不入库
+library/
+runtime/
+# 前端：dist 由 make web-build 生成，仅保留占位文件
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+# 其他
+.DS_Store
+*.log
