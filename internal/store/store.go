@@ -119,7 +119,17 @@ func versionOf(name string) (int, error) {
 }
 
 func dsnFor(path string) string {
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	slashed := filepath.ToSlash(path)
+	// Windows C:/xxx → 补前缀 / → /C:/xxx
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+
+	u := url.URL{
+		Scheme: "file",
+		Path:   slashed,
+	}
+
 	q := u.Query()
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "foreign_keys(1)")
