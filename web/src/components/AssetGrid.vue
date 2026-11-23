@@ -30,10 +30,13 @@ const GAP = 12
 const META = 58
 
 const container = ref<HTMLElement | null>(null)
+const sentinel = ref<HTMLElement | null>(null)
 const width = ref(1200)
 
 let observer: ResizeObserver | undefined
+let sentinelObserver: IntersectionObserver | undefined
 let lastLoadMoreAt = 0
+let scrollEl: HTMLElement | null = null
 
 function measure(): void {
   const el = container.value
@@ -53,7 +56,9 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   observer?.disconnect()
+  sentinelObserver?.disconnect()
   window.removeEventListener('resize', measure)
+  detachScrollListener()
 })
 
 const columns = computed(() =>
@@ -66,7 +71,7 @@ const rowHeight = computed(() => Math.max(80, columnWidth.value + META))
 
 // ---- 触底自动加载 ----
 
-// 节流，避免 scrollEnd 在连续滚动时反复触发请求；force 用于「视口未填满」的补页。
+// 节流，避免连续滚动时反复触发请求；force 用于「视口未填满」的补页。
 function requestMore(force = false): void {
   const now = Date.now()
   if (!force && now - lastLoadMoreAt < 250) return
@@ -74,23 +79,78 @@ function requestMore(force = false): void {
   emit('load-more')
 }
 
+// RecycleScroller 的 scrollEnd 事件受 emitUpdate 控制（默认 false），
+// 因此这里直接监听滚动容器的原生 scroll，距离底部不足约 1.5 行时触发加载。
+function onScrollerScroll(): void {
+  const el = scrollEl
+  if (!el || !props.items.length) return
+  const remaining = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (remaining <= rowHeight.value * 1.5) requestMore()
+}
+
+// 冗余触发：开启 emit-update 后，滚动到最后一行的可见位置时也会派发 scrollEnd。
 function onReachEnd(): void {
   if (props.items.length) requestMore()
+}
+
+function scrollerElement(): HTMLElement | null {
+  return (container.value?.firstElementChild as HTMLElement | null) ?? null
+}
+
+function attachScrollListener(): void {
+  const el = scrollerElement()
+  if (!el || el === scrollEl) return
+  detachScrollListener()
+  scrollEl = el
+  el.addEventListener('scroll', onScrollerScroll, { passive: true })
+}
+
+function detachScrollListener(): void {
+  if (scrollEl) {
+    scrollEl.removeEventListener('scroll', onScrollerScroll)
+    scrollEl = null
+  }
 }
 
 // 首屏行数不足以撑满容器时不会产生滚动事件，此时也需要继续加载。
 // 只在 items.length 变化后检查一次，因此不受节流限制。
 function ensureViewportFilled(): void {
-  const el = (container.value?.firstElementChild as HTMLElement | null) ?? null
+  const el = scrollerElement()
   if (!el || !props.items.length) return
   if (el.scrollHeight <= el.clientHeight + rowHeight.value) requestMore(true)
 }
 
+// 列表尾部哨兵：用 IntersectionObserver 兜底，滚动容器变化、页面级滚动都能感知。
+function observeSentinel(): void {
+  sentinelObserver?.disconnect()
+  sentinelObserver = undefined
+  const el = sentinel.value
+  if (!el || !props.items.length || typeof IntersectionObserver === 'undefined') return
+  sentinelObserver = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) requestMore()
+    },
+    { rootMargin: '400px 0px' },
+  )
+  sentinelObserver.observe(el)
+}
+
+watch(sentinel, observeSentinel)
+
 watch(
   () => props.items.length,
   () => {
-    void nextTick(ensureViewportFilled)
+    void nextTick(() => {
+      if (!props.items.length) {
+        detachScrollListener()
+        return
+      }
+      attachScrollListener()
+      ensureViewportFilled()
+      observeSentinel()
+    })
   },
+  { immediate: true },
 )
 
 interface Cell {
@@ -131,6 +191,7 @@ const rows = computed<Row[]>(() => {
       :item-size="rowHeight"
       key-field="id"
       :buffer="600"
+      emit-update
       @scroll-end="onReachEnd"
     >
       <template #default="{ item }">
@@ -162,6 +223,9 @@ const rows = computed<Row[]>(() => {
           </button>
         </div>
       </template>
+      <template #after>
+        <div ref="sentinel" class="grid-sentinel" aria-hidden="true" />
+      </template>
     </RecycleScroller>
     <slot v-else name="empty" />
   </div>
@@ -179,6 +243,11 @@ const rows = computed<Row[]>(() => {
 
 .grid-row {
   display: grid;
+}
+
+.grid-sentinel {
+  width: 100%;
+  height: 1px;
 }
 
 .asset-card {
