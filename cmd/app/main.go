@@ -22,6 +22,7 @@ import (
 	"iphoto/internal/importer"
 	"iphoto/internal/logging"
 	"iphoto/internal/maintenance"
+	"iphoto/internal/similar"
 	"iphoto/internal/store"
 	"iphoto/internal/thumbs"
 	"iphoto/web"
@@ -76,6 +77,7 @@ func run(noBrowser bool) error {
 	}
 
 	manager := importer.NewManager(st, paths, queue, logger)
+	similarManager := similar.NewManager(st, paths, logger)
 
 	// 设置页的「关闭服务」通过该通道触发与信号一致的优雅退出路径。
 	shutdownCh := make(chan struct{})
@@ -91,6 +93,7 @@ func run(noBrowser bool) error {
 		Version:  version,
 		Logger:   logger,
 		Importer: manager,
+		Similar:  similarManager,
 		Thumbs:   queue,
 		Shutdown: requestShutdown,
 	})
@@ -133,11 +136,17 @@ func run(noBrowser bool) error {
 		return nil
 	}
 
-	// 优雅关闭：先取消进行中的导入并等待其收尾，再关闭 HTTP 服务。
+	// 优雅关闭：先取消进行中的后台任务并等待其收尾，再关闭 HTTP 服务。
 	if batchID := manager.CancelActive(); batchID != 0 {
 		logger.Info("正在取消进行中的导入批次", "batch", batchID)
 		if !manager.WaitIdle(3 * time.Second) {
 			logger.Warn("导入批次未在 3 秒内结束，继续关闭（启动时会做中断修复）", "batch", batchID)
+		}
+	}
+	if similarManager.CancelActive() {
+		logger.Info("正在取消进行中的相似图片检测")
+		if !similarManager.WaitIdle(2 * time.Second) {
+			logger.Warn("相似图片检测未在 2 秒内结束，继续关闭")
 		}
 	}
 

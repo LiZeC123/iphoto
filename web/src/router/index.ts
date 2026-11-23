@@ -6,6 +6,7 @@ const router = createRouter({
   routes: [
     { path: '/', name: 'gallery', component: () => import('@/views/GalleryView.vue') },
     { path: '/timeline', name: 'timeline', component: () => import('@/views/TimelineView.vue') },
+    { path: '/similar', name: 'similar', component: () => import('@/views/SimilarView.vue') },
     { path: '/albums', name: 'albums', component: () => import('@/views/AlbumsView.vue') },
     {
       path: '/albums/:id',

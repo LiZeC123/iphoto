@@ -14,6 +14,7 @@ import (
 
 	"iphoto/internal/config"
 	"iphoto/internal/importer"
+	"iphoto/internal/similar"
 	"iphoto/internal/store"
 	"iphoto/internal/thumbs"
 )
@@ -26,6 +27,7 @@ type Options struct {
 	Version  string
 	Logger   *slog.Logger
 	Importer *importer.Manager
+	Similar  *similar.Manager
 	Thumbs   *thumbs.Queue
 	// Shutdown 由 main 注入，用于设置页的「关闭服务」按钮触发优雅退出。
 	Shutdown func()
@@ -76,6 +78,11 @@ func New(opts Options) http.Handler {
 	mux.HandleFunc("GET /api/albums/{id}/months", h.albumMonths)
 	mux.HandleFunc("POST /api/albums/{id}/items", h.addAlbumItems)
 	mux.HandleFunc("DELETE /api/albums/{id}/items", h.removeAlbumItems)
+
+	mux.HandleFunc("POST /api/similar/detect", h.startSimilar)
+	mux.HandleFunc("GET /api/similar/progress", h.similarProgress)
+	mux.HandleFunc("GET /api/similar/result", h.similarResult)
+	mux.HandleFunc("POST /api/similar/cancel", h.cancelSimilar)
 
 	mux.HandleFunc("GET /api/timeline/months", h.timelineMonths)
 

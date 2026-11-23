@@ -295,6 +295,40 @@ func (s *Store) ListAssets(ctx context.Context, f AssetFilter) (AssetPage, error
 	return s.queryAssets(ctx, where, args, f.Sort, f.Page, f.PageSize)
 }
 
+// ListDetectionAssets 返回参与相似图片检测的 ready 图片：
+// 有效拍摄时间非空，且（可选）不早于 from；按有效时间升序，时间相同再按导入时间/哈希排序，
+// 保证检测结果稳定。
+func (s *Store) ListDetectionAssets(ctx context.Context, from string) ([]Asset, error) {
+	where := []string{
+		"a.status = 'ready'",
+		effectiveTimeExpr + " IS NOT NULL",
+		"length(" + effectiveTimeExpr + ") >= 10",
+	}
+	args := make([]any, 0, 1)
+	if v := strings.TrimSpace(from); v != "" {
+		where = append(where, effectiveTimeExpr+" >= ?")
+		args = append(args, v)
+	}
+	query := `SELECT ` + assetColumns + ` FROM assets a WHERE ` + strings.Join(where, " AND ") +
+		` ORDER BY ` + effectiveTimeExpr + ` ASC, a.added_at ASC, a.hash ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("查询检测候选图片: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]Asset, 0, 256)
+	for rows.Next() {
+		a, err := scanAsset(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // queryAssets 是 ListAssets 与智能相册共用的分页查询实现。
 func (s *Store) queryAssets(ctx context.Context, where []string, args []any, sort string, page, pageSize int) (AssetPage, error) {
 	if page < 1 {

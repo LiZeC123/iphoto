@@ -12,6 +12,7 @@ const route = useRoute()
 const nav = [
   { to: '/', label: '图库' },
   { to: '/timeline', label: '时间线' },
+  { to: '/similar', label: '相似图片' },
   { to: '/albums', label: '相册' },
   { to: '/tags', label: '标签' },
   { to: '/import', label: '导入' },

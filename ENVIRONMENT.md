@@ -111,6 +111,31 @@ UI（时间线两行导航、标签页搜索+固定首项、自动加载、查�
 
 2026-11-23 用户验收通过；随后按要求调整：缩放控件从左侧详情面板移到 PhotoSwipe 右上角工具栏（与自带缩放、关闭同排），并新增 `A` 上一张 / `S` 下一张 / `D` 删除快捷键（保留 `Z` 缩放）。`npm run typecheck`、`npm run build` 复验通过，细节仍由用户浏览器验收。
 
+相似图片检测（本轮新增模块）：
+
+```text
+gofmt -l cmd internal web   无输出
+go vet ./...                PASS
+go test ./...               PASS（新增 internal/similar：dHash、分组、缓存、上限、坏图、起始时间等 10 个用例，以及 v1→v2 迁移用例；共 55 个测试函数）
+npm run typecheck           PASS
+npm run build               PASS
+```
+
+临时库 API 端到端（7 张生成图片，mtime 决定拍摄时间；`IPHOTO_BASE_DIR=/tmp/...`）：
+
+| 场景 | 结果 |
+|---|---|
+| 空结果 / 初始进度 | `GET /similar/result` → 404；`progress.status=idle` |
+| 首次检测（阈值 8） | 7/7，组大小 `[3,2,2]`，组首图按时间排序，组内第一张无 `distance_from_prev` |
+| 第二次检测 | `cached=7`、`computed=0`，分组一致 |
+| 起始时间过滤 | 从 10:01 起 `total=6`，A 组只剩 a2/a3 |
+| 起始时间持久化 | `app_settings.similar_from` 写入并可回读 |
+| 参数校验 | 未知算法 / 阈值 65 均返回 400 |
+| schema 与缓存 | `user_version=2`，`asset_signatures` 7 行 |
+| 回收站联动 | 删除 a1 后再次检测 `total=6`，A 组剩 2 张 |
+
+UI（相似图片页的进度、结果分组、勾选删除）由用户在真实浏览器验收。
+
 ### 3.4 浏览器验收
 
 2026-11-22 首轮 M1 UI（图库 + 导入页）由用户在浏览器验收通过。

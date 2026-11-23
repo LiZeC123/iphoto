@@ -19,20 +19,20 @@ func TestOpenMigrates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if version != 1 {
-		t.Fatalf("user_version = %d, want 1", version)
+	if version != 2 {
+		t.Fatalf("user_version = %d, want 2", version)
 	}
 
 	var tables int
 	if err := s.DB().QueryRow(
 		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN
 		 ('assets','tags','asset_tags','albums','album_items','time_parse_rules',
-		  'import_batches','import_items','app_settings','operations')`,
+		  'import_batches','import_items','app_settings','operations','asset_signatures')`,
 	).Scan(&tables); err != nil {
 		t.Fatalf("统计表数量: %v", err)
 	}
-	if tables != 10 {
-		t.Fatalf("表数量 = %d, want 10", tables)
+	if tables != 11 {
+		t.Fatalf("表数量 = %d, want 11", tables)
 	}
 
 	var rules int
@@ -76,5 +76,58 @@ func TestOpenIsIdempotent(t *testing.T) {
 	}
 	if rules != 2 {
 		t.Fatalf("内置规则数量 = %d, want 2（迁移被重复执行？）", rules)
+	}
+}
+
+// TestMigrateFromV1ToV2 验证已有 v1 库升级时会补上指纹表与表达式索引。
+func TestMigrateFromV1ToV2(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "library.sqlite")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// 模拟 001 时代的库：删除 002 引入的对象并回退版本号。
+	for _, stmt := range []string{
+		`DROP INDEX IF EXISTS idx_assets_effective_time`,
+		`DROP INDEX IF EXISTS idx_asset_signatures_algorithm`,
+		`DROP TABLE IF EXISTS asset_signatures`,
+		`PRAGMA user_version = 1`,
+	} {
+		if _, err := s.DB().Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("升级 Open: %v", err)
+	}
+	defer upgraded.Close()
+
+	version, err := upgraded.SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 {
+		t.Fatalf("升级后 user_version = %d, want 2", version)
+	}
+	var table int
+	if err := upgraded.DB().QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'asset_signatures'`).Scan(&table); err != nil {
+		t.Fatal(err)
+	}
+	if table != 1 {
+		t.Fatal("升级后缺少 asset_signatures 表")
+	}
+	var index int
+	if err := upgraded.DB().QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_assets_effective_time'`).Scan(&index); err != nil {
+		t.Fatal(err)
+	}
+	if index != 1 {
+		t.Fatal("升级后缺少 idx_assets_effective_time 索引")
 	}
 }
