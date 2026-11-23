@@ -43,17 +43,28 @@ type Manager struct {
 
 // Snapshot 是进度接口返回的数据。
 type Snapshot struct {
-	BatchID          int64   `json:"batch_id"`
-	Status           string  `json:"status"`
-	Total            int64   `json:"total"`
-	Processed        int64   `json:"processed"`
-	Imported         int64   `json:"imported"`
-	DuplicateSkipped int64   `json:"duplicate_skipped"`
-	DuplicatePending int64   `json:"duplicate_pending"`
-	Failed           int64   `json:"failed"`
-	Current          string  `json:"current,omitempty"`
-	StartedAt        string  `json:"started_at"`
-	FinishedAt       *string `json:"finished_at,omitempty"`
+	BatchID          int64       `json:"batch_id"`
+	Status           string      `json:"status"`
+	Total            int64       `json:"total"`
+	Processed        int64       `json:"processed"`
+	Imported         int64       `json:"imported"`
+	DuplicateSkipped int64       `json:"duplicate_skipped"`
+	DuplicatePending int64       `json:"duplicate_pending"`
+	Failed           int64       `json:"failed"`
+	Unsupported      Unsupported `json:"unsupported"`
+	Current          string      `json:"current,omitempty"`
+	StartedAt        string      `json:"started_at"`
+	FinishedAt       *string     `json:"finished_at,omitempty"`
+}
+
+// batchStats 是写入 import_batches.stats_json 的统计结构。
+type batchStats struct {
+	Total            int64       `json:"total"`
+	Imported         int64       `json:"imported"`
+	DuplicateSkipped int64       `json:"duplicate_skipped"`
+	DuplicatePending int64       `json:"duplicate_pending"`
+	Failed           int64       `json:"failed"`
+	Unsupported      Unsupported `json:"unsupported"`
 }
 
 // Resolution 是重复项处理动作。
@@ -144,6 +155,40 @@ func (m *Manager) Cancel(batchID int64) error {
 	return nil
 }
 
+// CancelActive 取消当前正在执行的批次并返回其 ID；没有活动批次时返回 0。
+func (m *Manager) CancelActive() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active == nil {
+		return 0
+	}
+	select {
+	case <-m.active.done:
+		return 0
+	default:
+		m.active.cancel()
+		return m.active.id
+	}
+}
+
+// WaitIdle 等待当前批次结束；超时返回 false。没有活动批次时立即返回 true。
+func (m *Manager) WaitIdle(timeout time.Duration) bool {
+	m.mu.Lock()
+	r := m.active
+	m.mu.Unlock()
+	if r == nil {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-r.done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
 // Progress 优先返回内存中活动批次快照，否则从数据库重建。
 func (m *Manager) Progress(ctx context.Context, batchID int64) (Snapshot, error) {
 	m.mu.Lock()
@@ -162,12 +207,12 @@ func (m *Manager) Progress(ctx context.Context, batchID int64) (Snapshot, error)
 		return Snapshot{}, err
 	}
 	var total int64
+	unsupported := newUnsupported()
 	if b.StatsJSON != nil {
-		var stats struct {
-			Total int64 `json:"total"`
-		}
+		var stats batchStats
 		if err := json.Unmarshal([]byte(*b.StatsJSON), &stats); err == nil {
 			total = stats.Total
+			unsupported = normalizeUnsupported(stats.Unsupported)
 		}
 	}
 	processed := counts["new"] + counts["duplicate_skip"] + counts["duplicate_pending"] +
@@ -181,9 +226,33 @@ func (m *Manager) Progress(ctx context.Context, batchID int64) (Snapshot, error)
 		DuplicateSkipped: counts["duplicate_skip"],
 		DuplicatePending: counts["duplicate_pending"],
 		Failed:           counts["failed"],
+		Unsupported:      unsupported,
 		StartedAt:        b.StartedAt,
 		FinishedAt:       b.FinishedAt,
 	}, nil
+}
+
+func normalizeUnsupported(u Unsupported) Unsupported {
+	if u.ByExt == nil {
+		u.ByExt = make([]ExtCount, 0, 4)
+	}
+	if u.Files == nil {
+		u.Files = make([]string, 0, 16)
+	}
+	return u
+}
+
+// UnsupportedFromStats 从 import_batches.stats_json 中取出「不支持文件」统计。
+// 旧批次没有该字段时返回空值。
+func UnsupportedFromStats(statsJSON *string) Unsupported {
+	if statsJSON == nil {
+		return newUnsupported()
+	}
+	var stats batchStats
+	if err := json.Unmarshal([]byte(*statsJSON), &stats); err != nil {
+		return newUnsupported()
+	}
+	return normalizeUnsupported(stats.Unsupported)
 }
 
 func (m *Manager) execute(r *run, root string) {
@@ -194,12 +263,13 @@ func (m *Manager) execute(r *run, root string) {
 		snapshot := r.snapshotLocked()
 		r.mu.Unlock()
 
-		stats, _ := json.Marshal(map[string]any{
-			"total":             snapshot.Total,
-			"imported":          snapshot.Imported,
-			"duplicate_skipped": snapshot.DuplicateSkipped,
-			"duplicate_pending": snapshot.DuplicatePending,
-			"failed":            snapshot.Failed,
+		stats, _ := json.Marshal(batchStats{
+			Total:            snapshot.Total,
+			Imported:         snapshot.Imported,
+			DuplicateSkipped: snapshot.DuplicateSkipped,
+			DuplicatePending: snapshot.DuplicatePending,
+			Failed:           snapshot.Failed,
+			Unsupported:      snapshot.Unsupported,
 		})
 		if err := m.store.FinishBatch(context.Background(), r.id, status,
 			time.Now().Format(store.TimeLayout), string(stats)); err != nil {
@@ -215,7 +285,9 @@ func (m *Manager) execute(r *run, root string) {
 		return
 	}
 	r.setTotal(int64(scan.Total))
-	m.log.Info("导入扫描完成", "batch", r.id, "path", root, "total", scan.Total, "unreadable", scan.Unreadable)
+	r.setUnsupported(scan.Unsupported)
+	m.log.Info("导入扫描完成", "batch", r.id, "path", root, "total", scan.Total,
+		"unreadable", scan.Unreadable, "unsupported", scan.Unsupported.Total)
 	if scan.Total == 0 {
 		return
 	}
@@ -467,16 +539,17 @@ type run struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 
-	mu        sync.Mutex
-	total     int64
-	imported  int64
-	dupSkip   int64
-	dupPend   int64
-	failed    int64
-	current   string
-	status    string
-	tags      []string
-	newHashes []string
+	mu          sync.Mutex
+	total       int64
+	imported    int64
+	dupSkip     int64
+	dupPend     int64
+	failed      int64
+	current     string
+	status      string
+	tags        []string
+	newHashes   []string
+	unsupported Unsupported
 }
 
 func (r *run) tagList() []string {
@@ -494,6 +567,12 @@ func (r *run) importedHashes() []string {
 func (r *run) setTotal(n int64) {
 	r.mu.Lock()
 	r.total = n
+	r.mu.Unlock()
+}
+
+func (r *run) setUnsupported(u Unsupported) {
+	r.mu.Lock()
+	r.unsupported = u
 	r.mu.Unlock()
 }
 
@@ -537,6 +616,7 @@ func (r *run) snapshotLocked() Snapshot {
 		DuplicateSkipped: r.dupSkip,
 		DuplicatePending: r.dupPend,
 		Failed:           r.failed,
+		Unsupported:      normalizeUnsupported(r.unsupported),
 		Current:          r.current,
 		StartedAt:        r.startedAt.Format(store.TimeLayout),
 	}

@@ -43,6 +43,19 @@ func (s *Store) ListTags(ctx context.Context) ([]Tag, error) {
 	return out, rows.Err()
 }
 
+// CountUntagged 统计没有任何标签的 ready 图片数量，供标签页固定首项展示。
+func (s *Store) CountUntagged(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT count(*) FROM assets a
+		WHERE a.status = 'ready'
+			AND NOT EXISTS (SELECT 1 FROM asset_tags at WHERE at.hash = a.hash)`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("统计未标记图片: %w", err)
+	}
+	return n, nil
+}
+
 // CreateTag 新建标签；已存在（忽略大小写）时返回 ErrTagExists。
 func (s *Store) CreateTag(ctx context.Context, name string) (Tag, error) {
 	name, err := normalizeTagName(name)

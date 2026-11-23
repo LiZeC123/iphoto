@@ -38,9 +38,10 @@ func (h *handler) scanImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.ok(w, map[string]any{
-		"path":       scan.Path,
-		"total":      scan.Total,
-		"unreadable": scan.Unreadable,
+		"path":        scan.Path,
+		"total":       scan.Total,
+		"unreadable":  scan.Unreadable,
+		"unsupported": scan.Unsupported,
 	})
 }
 
@@ -195,7 +196,8 @@ func (h *handler) importReport(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, http.StatusBadRequest, "批次 ID 非法")
 		return
 	}
-	if _, err := h.opts.Store.GetBatch(r.Context(), batchID); err != nil {
+	batch, err := h.opts.Store.GetBatch(r.Context(), batchID)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			h.fail(w, http.StatusNotFound, "导入批次不存在")
 			return
@@ -208,6 +210,7 @@ func (h *handler) importReport(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	unsupported := importer.UnsupportedFromStats(batch.StatsJSON)
 
 	var buf bytes.Buffer
 	buf.WriteString("\xEF\xBB\xBF") // BOM，便于 Excel 正确识别 UTF-8
@@ -218,6 +221,25 @@ func (h *handler) importReport(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, row := range rows {
 		if err := cw.Write([]string{row.SourcePath, row.Hash, row.Status, row.Message}); err != nil {
+			h.fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	// 类型不受支持的文件不在 import_items 中，额外补进报告，避免「没有记录 = 没被处理」。
+	for _, file := range unsupported.Files {
+		full := filepath.Join(batch.SourcePath, filepath.FromSlash(file))
+		ext := strings.ToLower(filepath.Ext(file))
+		if ext == "" {
+			ext = "(无后缀)"
+		}
+		if err := cw.Write([]string{full, "", "unsupported", "不支持的文件类型 " + ext}); err != nil {
+			h.fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if unsupported.Truncated {
+		if err := cw.Write([]string{"", "", "unsupported_summary",
+			fmt.Sprintf("共 %d 个不支持的文件，报告只列出前 %d 个", unsupported.Total, len(unsupported.Files))}); err != nil {
 			h.fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}

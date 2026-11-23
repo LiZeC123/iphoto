@@ -4,6 +4,7 @@ import type { Asset, AssetDetail, AssetPage, MonthCount } from './types'
 export interface AssetQuery {
   q?: string
   tag?: string
+  untagged?: string
   status?: string
   from?: string
   to?: string
@@ -26,6 +27,8 @@ export const assetsApi = {
   get: (hash: string) => api.get<AssetDetail>(`/assets/${hash}`),
   patch: (hash: string, body: { note?: string; taken_at_override?: string; original_name?: string }) =>
     api.patch<Asset>(`/assets/${hash}`, body),
+  rename: (hash: string, name: string) => api.post<Asset>(`/assets/${hash}/rename`, { name }),
+  reveal: (hash: string) => api.post<{ path: string }>(`/assets/${hash}/reveal`, {}),
   remove: (hash: string) => api.delete<{ hash: string; status: string }>(`/assets/${hash}`),
   batchExport: (hashes: string[], subdir: string) =>
     api.post<{

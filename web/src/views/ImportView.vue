@@ -3,9 +3,10 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { importApi } from '@/api/import'
 import { basename, errorMessage, settingsApi } from '@/api/settings'
-import type { DuplicateItem, ImportProgress, ImportScan } from '@/api/types'
+import type { DuplicateItem, ImportProgress, ImportScan, UnsupportedInfo } from '@/api/types'
 import PageShell from '@/components/PageShell.vue'
 import TagSelector from '@/components/TagSelector.vue'
+import UnsupportedReport from '@/components/UnsupportedReport.vue'
 import { formatBytes, formatPercent } from '@/utils/format'
 
 const path = ref('')
@@ -27,6 +28,10 @@ const percent = computed(() =>
   formatPercent(progress.value?.processed ?? 0, progress.value?.total ?? 0),
 )
 const reportUrl = computed(() => (batchId.value ? importApi.reportUrl(batchId.value) : ''))
+function emptyUnsupported(): UnsupportedInfo {
+  return { total: 0, by_ext: [], files: [], truncated: false }
+}
+
 const STATUS_LABELS: Record<string, string> = {
   running: '进行中',
   done: '已完成',
@@ -103,6 +108,7 @@ async function startImport(): Promise<void> {
       duplicate_skipped: 0,
       duplicate_pending: 0,
       failed: 0,
+      unsupported: emptyUnsupported(),
       started_at: '',
     }
     clearTimer()
@@ -178,6 +184,7 @@ onMounted(async () => {
         duplicate_skipped: 0,
         duplicate_pending: 0,
         failed: 0,
+        unsupported: emptyUnsupported(),
         started_at: '',
       }
       await refresh(active.batch_id)
@@ -216,8 +223,11 @@ onBeforeUnmount(clearTimer)
       <p v-if="scan" class="hint">
         扫描到 <strong>{{ scan.total }}</strong> 个可导入文件<template v-if="scan.unreadable"
           >，{{ scan.unreadable }} 个路径不可读</template
+        ><template v-if="scan.unsupported.total"
+          >，<strong class="warn-text">{{ scan.unsupported.total }}</strong> 个文件类型不支持</template
         >。<span class="mono dim">{{ scan.path }}</span>
       </p>
+      <UnsupportedReport v-if="scan" :info="scan.unsupported" />
       <label class="field-label import-tag-label" for="import-tags">导入标签（可选）</label>
       <TagSelector id="import-tags" v-model="importTags" placeholder="选择或输入标签，导入完成后统一添加" />
 
@@ -248,10 +258,15 @@ onBeforeUnmount(clearTimer)
         <span>跳过 {{ progress.duplicate_skipped }}</span>
         <span>待处理重复 {{ progress.duplicate_pending }}</span>
         <span>失败 {{ progress.failed }}</span>
+        <span v-if="progress.unsupported.total" class="warn-text">
+          类型不支持 {{ progress.unsupported.total }}
+        </span>
         <span v-if="progress.current" class="dim current">
           {{ basename(progress.current ?? '') }}
         </span>
       </div>
+
+      <UnsupportedReport :info="progress.unsupported" />
 
       <div v-if="!running" class="toolbar">
         <a v-if="batchId" class="btn" :href="reportUrl" download>导出 CSV 报告</a>

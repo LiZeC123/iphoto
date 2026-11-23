@@ -65,11 +65,14 @@ onBeforeUnmount(() => {
 })
 
 const activeTag = computed(() => (typeof route.query.tag === 'string' ? route.query.tag : ''))
+const untaggedOnly = computed(() => route.query.untagged === '1')
 const loadedAll = computed(() => items.value.length >= total.value)
 const selectedCount = computed(() => selected.value.size)
-const subtitle = computed(() =>
-  activeTag.value ? `标签「${activeTag.value}」共 ${total.value} 张` : `共 ${total.value} 张图片`,
-)
+const subtitle = computed(() => {
+  if (untaggedOnly.value) return `未标记标签 共 ${total.value} 张`
+  if (activeTag.value) return `标签「${activeTag.value}」共 ${total.value} 张`
+  return `共 ${total.value} 张图片`
+})
 
 async function load(reset: boolean): Promise<void> {
   if (loading.value) return
@@ -84,6 +87,7 @@ async function load(reset: boolean): Promise<void> {
     const res = await assetsApi.list({
       q: q.value.trim(),
       tag: activeTag.value,
+      untagged: untaggedOnly.value ? '1' : '',
       from: fromMonth.value,
       to: toMonth.value,
       sort: sort.value,
@@ -108,8 +112,17 @@ function clearFilters(): void {
   q.value = ''
   fromMonth.value = ''
   toMonth.value = ''
-  if (activeTag.value) void router.push({ path: '/' })
+  if (activeTag.value || untaggedOnly.value) void router.push({ path: '/' })
   else void load(true)
+}
+
+function clearRouteFilter(): void {
+  void router.push({ path: '/' })
+}
+
+function loadMore(): void {
+  if (loading.value || loadedAll.value) return
+  void load(false)
 }
 
 function openViewer(index: number): void {
@@ -260,7 +273,7 @@ async function batchDelete(): Promise<void> {
   }
 }
 
-watch(activeTag, () => {
+watch([activeTag, untaggedOnly], () => {
   void load(true)
 })
 
@@ -271,131 +284,154 @@ onMounted(() => {
 
 <template>
   <PageShell title="图库" :subtitle="subtitle">
-    <div class="toolbar filter-bar">
-      <input
-        v-model="q"
-        class="input grow"
-        type="search"
-        placeholder="搜索文件名或描述，回车确认"
-        @keyup.enter="search"
-      />
-      <label class="inline-field">
-        <span>从</span>
-        <input v-model="fromMonth" class="input" type="month" @change="search" />
-      </label>
-      <label class="inline-field">
-        <span>到</span>
-        <input v-model="toMonth" class="input" type="month" @change="search" />
-      </label>
-      <select v-model="sort" class="select" @change="search">
-        <option value="taken_at_desc">拍摄时间（新→旧）</option>
-        <option value="taken_at_asc">拍摄时间（旧→新）</option>
-        <option value="added_at_desc">导入时间（新→旧）</option>
-        <option value="name_asc">文件名</option>
-      </select>
-      <button class="btn" :disabled="loading" @click="clearFilters">清除</button>
-      <button v-if="!selectable" class="btn btn-primary" @click="enterSelection">选择</button>
-      <template v-else>
-        <button class="btn" :disabled="loading" @click="selectAll">全选</button>
-        <button class="btn" @click="exitSelection">退出选择</button>
-      </template>
-    </div>
-
-    <div v-if="activeTag" class="active-filter">
-      当前标签筛选：<strong>{{ activeTag }}</strong>
-      <button class="btn btn-sm" @click="router.push({ path: '/' })">清除</button>
-    </div>
-
-    <p v-if="error" class="banner error">{{ error }}</p>
-    <p v-if="notice" class="banner">{{ notice }}</p>
-
-    <AssetGrid
-      :items="items"
-      :selectable="selectable"
-      :selected="selected"
-      @open="openViewer"
-      @pick="onPick"
-    >
-      <template #empty>
-        <div class="empty">
-          <strong>没有符合条件的图片</strong>
-          <p>换个筛选条件，或先到「导入」页导入照片。</p>
-          <RouterLink to="/import" class="btn btn-primary">去导入</RouterLink>
-        </div>
-      </template>
-    </AssetGrid>
-
-    <div class="load-more">
-      <button v-if="items.length && !loadedAll" class="btn" :disabled="loading" @click="load(false)">
-        {{ loading ? '加载中…' : `加载更多（已显示 ${items.length}/${total}）` }}
-      </button>
-      <span v-else-if="items.length" class="dim">已加载全部 {{ total }} 张</span>
-    </div>
-
-    <div v-if="selectable" class="batch-bar">
-      <div class="batch-row">
-        <span class="batch-count">已选 {{ selectedCount }} 张</span>
-        <div class="selected-tags">
-          <span v-if="!selectedTags.length" class="dim">选中图片暂无标签</span>
-          <button
-            v-for="tag in selectedTags"
-            :key="tag.id"
-            type="button"
-            class="selected-tag"
-            :disabled="batchBusy || !selectedCount"
-            :title="`从选中的图片中移除标签「${tag.name}」`"
-            @click="removeTagFromSelection(tag)"
-          >
-            {{ tag.name }}
-            <span class="selected-tag-count">{{ tag.count }}</span>
-            <span class="selected-tag-x">×</span>
-          </button>
-        </div>
-      </div>
-      <div class="batch-row">
-        <TagSelector
-          v-model="batchTags"
-          placement="top"
-          placeholder="选择或输入要添加的标签"
-          class="batch-tags"
+    <div class="gallery-page">
+      <div class="toolbar filter-bar">
+        <input
+          v-model="q"
+          class="input grow"
+          type="search"
+          placeholder="搜索文件名 / 描述 / 标签，支持 AND、OR、NOT 与括号"
+          title="支持 AND / OR / NOT、- 取反、括号分组、引号短语，以及 name: / note: / tag: 字段前缀"
+          @keyup.enter="search"
         />
-        <button
-          class="btn btn-sm btn-primary"
-          :disabled="batchBusy || !selectedCount || !batchTags.length"
-          @click="batchAddTags"
-        >
-          添加标签
-        </button>
-        <select v-model="targetAlbum" class="select" :disabled="!albums.length">
-          <option value="">{{ albums.length ? '选择相册…' : '暂无普通相册' }}</option>
-          <option v-for="album in albums" :key="album.id" :value="String(album.id)">
-            {{ album.name }}
-          </option>
+        <label class="inline-field">
+          <span>从</span>
+          <input v-model="fromMonth" class="input" type="month" @change="search" />
+        </label>
+        <label class="inline-field">
+          <span>到</span>
+          <input v-model="toMonth" class="input" type="month" @change="search" />
+        </label>
+        <select v-model="sort" class="select" @change="search">
+          <option value="taken_at_desc">拍摄时间（新→旧）</option>
+          <option value="taken_at_asc">拍摄时间（旧→新）</option>
+          <option value="added_at_desc">导入时间（新→旧）</option>
+          <option value="name_asc">文件名</option>
         </select>
-        <button
-          class="btn btn-sm"
-          :disabled="batchBusy || !selectedCount || !targetAlbum"
-          @click="batchAddToAlbum"
-        >
-          加入相册
-        </button>
-        <button class="btn btn-sm" :disabled="batchBusy || !selectedCount" @click="batchExport">
-          导出
-        </button>
-        <button class="btn btn-sm btn-danger" :disabled="batchBusy || !selectedCount" @click="batchDelete">
-          移入回收站
-        </button>
-        <button class="btn btn-sm" :disabled="!selectedCount" @click="clearSelection">清空选择</button>
+        <button class="btn" :disabled="loading" @click="clearFilters">清除</button>
+        <button v-if="!selectable" class="btn btn-primary" @click="enterSelection">选择</button>
+        <template v-else>
+          <button class="btn" :disabled="loading" @click="selectAll">全选</button>
+          <button class="btn" @click="exitSelection">退出选择</button>
+        </template>
       </div>
-    </div>
 
-    <PhotoViewer
-      :assets="items"
-      :start-index="viewerIndex"
-      :open="viewerOpen"
-      @close="viewerOpen = false"
-      @updated="onUpdated"
-      @deleted="onDeleted"
-    />
+      <p class="hint dim search-hint">
+        支持 <code>AND</code> / <code>OR</code> / <code>NOT</code>（或 <code>-</code>）与括号组合，可用
+        <code>name:</code> / <code>note:</code> / <code>tag:</code>，例如
+        <code>tag:旅行 AND NOT name:截图</code>。
+      </p>
+
+      <div v-if="activeTag || untaggedOnly" class="active-filter">
+        <template v-if="untaggedOnly">
+          当前筛选：<strong>未标记标签</strong>
+        </template>
+        <template v-else>
+          当前标签筛选：<strong>{{ activeTag }}</strong>
+        </template>
+        <button class="btn btn-sm" @click="clearRouteFilter">清除</button>
+      </div>
+
+      <p v-if="error" class="banner error">{{ error }}</p>
+      <p v-if="notice" class="banner">{{ notice }}</p>
+
+      <AssetGrid
+        :items="items"
+        :selectable="selectable"
+        :selected="selected"
+        @open="openViewer"
+        @pick="onPick"
+        @load-more="loadMore"
+      >
+        <template #empty>
+          <div class="empty">
+            <strong>没有符合条件的图片</strong>
+            <p>换个筛选条件，或先到「导入」页导入照片。</p>
+            <RouterLink to="/import" class="btn btn-primary">去导入</RouterLink>
+          </div>
+        </template>
+      </AssetGrid>
+
+      <div class="load-more">
+        <span v-if="loading" class="dim">加载中…</span>
+        <span v-else-if="items.length && !loadedAll" class="dim">
+          继续向下滚动自动加载（已显示 {{ items.length }}/{{ total }}）
+        </span>
+        <span v-else-if="items.length" class="dim">已加载全部 {{ total }} 张</span>
+      </div>
+
+      <div v-if="selectable" class="batch-bar">
+        <div class="batch-row">
+          <span class="batch-count">已选 {{ selectedCount }} 张</span>
+          <div class="selected-tags">
+            <span v-if="!selectedTags.length" class="dim">选中图片暂无标签</span>
+            <button
+              v-for="tag in selectedTags"
+              :key="tag.id"
+              type="button"
+              class="selected-tag"
+              :disabled="batchBusy || !selectedCount"
+              :title="`从选中的图片中移除标签「${tag.name}」`"
+              @click="removeTagFromSelection(tag)"
+            >
+              {{ tag.name }}
+              <span class="selected-tag-count">{{ tag.count }}</span>
+              <span class="selected-tag-x">×</span>
+            </button>
+          </div>
+        </div>
+        <div class="batch-row">
+          <TagSelector
+            v-model="batchTags"
+            placement="top"
+            placeholder="选择或输入要添加的标签"
+            class="batch-tags"
+          />
+          <button
+            class="btn btn-sm btn-primary"
+            :disabled="batchBusy || !selectedCount || !batchTags.length"
+            @click="batchAddTags"
+          >
+            添加标签
+          </button>
+          <select v-model="targetAlbum" class="select" :disabled="!albums.length">
+            <option value="">{{ albums.length ? '选择相册…' : '暂无普通相册' }}</option>
+            <option v-for="album in albums" :key="album.id" :value="String(album.id)">
+              {{ album.name }}
+            </option>
+          </select>
+          <button
+            class="btn btn-sm"
+            :disabled="batchBusy || !selectedCount || !targetAlbum"
+            @click="batchAddToAlbum"
+          >
+            加入相册
+          </button>
+          <button class="btn btn-sm" :disabled="batchBusy || !selectedCount" @click="batchExport">
+            导出
+          </button>
+          <button class="btn btn-sm btn-danger" :disabled="batchBusy || !selectedCount" @click="batchDelete">
+            移入回收站
+          </button>
+          <button class="btn btn-sm" :disabled="!selectedCount" @click="clearSelection">清空选择</button>
+        </div>
+      </div>
+
+      <PhotoViewer
+        :assets="items"
+        :start-index="viewerIndex"
+        :open="viewerOpen"
+        @close="viewerOpen = false"
+        @updated="onUpdated"
+        @deleted="onDeleted"
+      />
+    </div>
   </PageShell>
 </template>
+
+<style scoped>
+/* 搜索语法提示与筛选条占用纵向空间，相应收缩虚拟滚动区域。 */
+.gallery-page :deep(.asset-grid) {
+  height: calc(100dvh - 300px);
+}
+</style>

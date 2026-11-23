@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { errorMessage } from '@/api/settings'
@@ -10,37 +10,31 @@ import PageShell from '@/components/PageShell.vue'
 const router = useRouter()
 
 const tags = ref<Tag[]>([])
-const newName = ref('')
+const untaggedCount = ref(0)
+const keyword = ref('')
 const loading = ref(false)
 const error = ref('')
 const notice = ref('')
 
+const filteredTags = computed(() => {
+  const q = keyword.value.trim().toLowerCase()
+  if (!q) return tags.value
+  return tags.value.filter((tag) => tag.name.toLowerCase().includes(q))
+})
+const subtitle = computed(
+  () => `共 ${tags.value.length} 个标签 · ${untaggedCount.value} 张图片未标记`,
+)
+
 async function load(): Promise<void> {
   loading.value = true
   try {
-    tags.value = (await tagsApi.list()).items
+    const res = await tagsApi.list()
+    tags.value = res.items
+    untaggedCount.value = res.untagged_count
   } catch (err) {
     error.value = errorMessage(err)
   } finally {
     loading.value = false
-  }
-}
-
-async function create(): Promise<void> {
-  error.value = ''
-  notice.value = ''
-  const name = newName.value.trim()
-  if (!name) {
-    error.value = '请输入标签名'
-    return
-  }
-  try {
-    await tagsApi.create(name)
-    newName.value = ''
-    notice.value = `已创建标签「${name}」`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
   }
 }
 
@@ -49,6 +43,7 @@ async function rename(tag: Tag): Promise<void> {
   if (!name || !name.trim() || name.trim() === tag.name) return
   try {
     await tagsApi.rename(tag.id, name.trim())
+    notice.value = `已重命名为「${name.trim()}」`
     await load()
   } catch (err) {
     error.value = errorMessage(err)
@@ -59,6 +54,7 @@ async function remove(tag: Tag): Promise<void> {
   if (!window.confirm(`删除标签「${tag.name}」？关联会被移除，图片不受影响。`)) return
   try {
     await tagsApi.remove(tag.id)
+    notice.value = `已删除标签「${tag.name}」`
     await load()
   } catch (err) {
     error.value = errorMessage(err)
@@ -69,29 +65,38 @@ function openTag(tag: Tag): void {
   void router.push({ path: '/', query: { tag: tag.name } })
 }
 
+// 固定的首项：快速排查还没有打标签的图片。
+function openUntagged(): void {
+  void router.push({ path: '/', query: { untagged: '1' } })
+}
+
 onMounted(load)
 </script>
 
 <template>
-  <PageShell title="标签" :subtitle="`共 ${tags.length} 个标签`">
+  <PageShell title="标签" :subtitle="subtitle">
     <section class="panel">
-      <label class="field-label" for="new-tag">新建标签</label>
+      <label class="field-label" for="tag-search">搜索标签</label>
       <div class="toolbar">
         <input
-          id="new-tag"
-          v-model="newName"
+          id="tag-search"
+          v-model="keyword"
           class="input grow"
-          placeholder="例如：旅行、家人、2024"
-          @keyup.enter="create"
+          type="search"
+          placeholder="输入标签名关键词，实时筛选下方列表"
+          spellcheck="false"
         />
-        <button class="btn btn-primary" :disabled="loading" @click="create">创建</button>
+        <button v-if="keyword" class="btn" @click="keyword = ''">清除搜索</button>
       </div>
+      <p class="hint dim">
+        列表首项固定为「未标记任何标签」，点击可在图库中查看这些图片；搜索只筛选标签行，不影响该入口。
+      </p>
     </section>
 
     <p v-if="error" class="banner error">{{ error }}</p>
     <p v-if="notice" class="banner">{{ notice }}</p>
 
-    <table v-if="tags.length" class="data-table panel">
+    <table v-if="!loading" class="data-table panel">
       <thead>
         <tr>
           <th>标签</th>
@@ -100,7 +105,15 @@ onMounted(load)
         </tr>
       </thead>
       <tbody>
-        <tr v-for="tag in tags" :key="tag.id">
+        <tr class="untagged-row">
+          <td>
+            <button class="link-button" @click="openUntagged">未标记任何标签</button>
+            <span class="dim fixed-badge">固定入口</span>
+          </td>
+          <td class="dim">{{ untaggedCount }}</td>
+          <td class="dim">—</td>
+        </tr>
+        <tr v-for="tag in filteredTags" :key="tag.id">
           <td>
             <button class="link-button" @click="openTag(tag)">{{ tag.name }}</button>
           </td>
@@ -113,10 +126,12 @@ onMounted(load)
       </tbody>
     </table>
 
-    <div v-else-if="!loading" class="empty">
-      <strong>还没有标签</strong>
-      <p>先创建一个，然后在图库中批量给图片打标签。</p>
-    </div>
+    <p v-if="!loading && !tags.length" class="dim empty-tip">
+      还没有标签。可以在图库中选择图片后批量打标签（标签选择器支持直接输入新标签名）。
+    </p>
+    <p v-else-if="!loading && keyword && !filteredTags.length" class="dim empty-tip">
+      没有匹配「{{ keyword }}」的标签。
+    </p>
   </PageShell>
 </template>
 
@@ -140,5 +155,22 @@ onMounted(load)
 
 .data-table.panel {
   padding: 6px 10px;
+}
+
+.untagged-row td {
+  background: rgba(76, 141, 255, 0.06);
+}
+
+.fixed-badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+}
+
+.empty-tip {
+  margin: 4px 0 0;
+  font-size: 13px;
 }
 </style>

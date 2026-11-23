@@ -597,3 +597,76 @@ body {
   background: var(--bg-elevated);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
 }
+
+/* ---- M5：自动加载、空状态与搜索提示 ---- */
+
+.load-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 4px;
+  font-size: 13px;
+}
+
+.empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-height: 240px;
+  padding: 40px 24px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.empty strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.empty p {
+  margin: 4px 0 14px;
+}
+
+.search-hint {
+  margin: -2px 0 14px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.search-hint code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.warn-text {
+  color: #ffb04c;
+}
+
+/* ---- PhotoSwipe 顶部缩放控件（图片详情右上角，与自带缩放/关闭按钮同排） ---- */
+
+.pswp__button.iphoto-zoom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  color: var(--pswp-icon-color, #fff);
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+}
+
+.pswp__button.iphoto-zoom:hover,
+.pswp__button.iphoto-zoom:focus {
+  opacity: 1;
+}
+
+.pswp__button.iphoto-zoom--actual {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}

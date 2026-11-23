@@ -41,9 +41,25 @@ func sanitizeName(originalName, hash string) string {
 	if len(name) > 180 {
 		ext := filepath.Ext(name)
 		stem := strings.TrimSuffix(name, ext)
-		name = stem[:180-len(ext)] + ext
+		// 按字节截断时保证不切坏 UTF-8 字符（文件名可能含中文）。
+		name = truncateUTF8(stem, 180-len(ext)) + ext
 	}
 	return name
+}
+
+// truncateUTF8 把 s 截断到不超过 maxBytes 字节，且不拆分多字节字符。
+func truncateUTF8(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && (s[cut]&0xC0) == 0x80 { // 落在续字节上就继续往前回退
+		cut--
+	}
+	return s[:cut]
 }
 
 func splitName(name string) (stem, ext string) {

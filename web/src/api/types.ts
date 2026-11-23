@@ -31,6 +31,21 @@ export interface ImportScan {
   path: string
   total: number
   unreadable: number
+  unsupported: UnsupportedInfo
+}
+
+/** 扩展名（含点；无后缀为 "(无后缀)"）与对应文件数。 */
+export interface ExtCount {
+  ext: string
+  count: number
+}
+
+/** 扫描/导入时因类型不支持而被跳过的文件，最多列出前 100 个。 */
+export interface UnsupportedInfo {
+  total: number
+  by_ext: ExtCount[]
+  files: string[]
+  truncated: boolean
 }
 
 export interface ImportProgress {
@@ -42,6 +57,7 @@ export interface ImportProgress {
   duplicate_skipped: number
   duplicate_pending: number
   failed: number
+  unsupported: UnsupportedInfo
   current?: string
   started_at: string
   finished_at?: string

@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -315,5 +316,76 @@ func TestManagerImportAppliesTags(t *testing.T) {
 	}
 	if page.Total != 1 {
 		t.Fatalf("按标签筛选 total = %d", page.Total)
+	}
+}
+
+func TestManagerRename(t *testing.T) {
+	base := t.TempDir()
+	paths := testPaths(base)
+	if err := paths.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := NewManager(st, paths, thumbs.New(paths, logger, 1), logger)
+
+	src := filepath.Join(base, "src")
+	writePNG(t, filepath.Join(src, "old.png"), color.RGBA{R: 7, G: 8, B: 9, A: 255})
+	if _, err := m.Start(src, nil); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	snap := waitDone(t, m, 1)
+	if snap.Status != "done" || snap.Imported != 1 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+
+	ctx := context.Background()
+	page, err := st.ListAssets(ctx, store.AssetFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := page.Items[0]
+	oldAbs := paths.BlobPath(asset.RelPath)
+
+	renamed, err := m.Rename(ctx, asset.Hash, "新名字")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if renamed.OriginalName != "新名字.png" || renamed.StorageName != "新名字.png" {
+		t.Fatalf("重命名结果 = %q / %q", renamed.OriginalName, renamed.StorageName)
+	}
+	if renamed.RelPath == asset.RelPath {
+		t.Fatalf("rel_path 未更新: %s", renamed.RelPath)
+	}
+	if _, err := os.Stat(oldAbs); !os.IsNotExist(err) {
+		t.Fatalf("旧文件仍然存在: %v", err)
+	}
+	if _, err := os.Stat(paths.BlobPath(renamed.RelPath)); err != nil {
+		t.Fatalf("新文件缺失: %v", err)
+	}
+	loaded, err := st.GetAsset(ctx, asset.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.OriginalName != "新名字.png" || loaded.RelPath != renamed.RelPath {
+		t.Fatalf("数据库未同步: %+v", loaded)
+	}
+
+	if _, err := m.Rename(ctx, asset.Hash, "bad.txt"); !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("修改扩展名的 err = %v, want ErrInvalidName", err)
+	}
+	if _, err := m.Rename(ctx, asset.Hash, "../escape.png"); !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("路径分隔符的 err = %v, want ErrInvalidName", err)
+	}
+	if _, err := m.Rename(ctx, asset.Hash, "a:b.png"); !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("Windows 非法字符的 err = %v, want ErrInvalidName", err)
+	}
+	// 同名重命名应为幂等操作。
+	if _, err := m.Rename(ctx, asset.Hash, "新名字.png"); err != nil {
+		t.Fatalf("同名重命名: %v", err)
 	}
 }

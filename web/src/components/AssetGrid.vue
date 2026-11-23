@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RecycleScroller } from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 
@@ -23,6 +23,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   open: [index: number]
   pick: [payload: { hash: string; index: number; shift: boolean }]
+  'load-more': []
 }>()
 
 const GAP = 12
@@ -32,6 +33,7 @@ const container = ref<HTMLElement | null>(null)
 const width = ref(1200)
 
 let observer: ResizeObserver | undefined
+let lastLoadMoreAt = 0
 
 function measure(): void {
   const el = container.value
@@ -61,6 +63,35 @@ const columnWidth = computed(
   () => (width.value - GAP * (columns.value - 1)) / columns.value,
 )
 const rowHeight = computed(() => Math.max(80, columnWidth.value + META))
+
+// ---- 触底自动加载 ----
+
+// 节流，避免 scrollEnd 在连续滚动时反复触发请求；force 用于「视口未填满」的补页。
+function requestMore(force = false): void {
+  const now = Date.now()
+  if (!force && now - lastLoadMoreAt < 250) return
+  lastLoadMoreAt = now
+  emit('load-more')
+}
+
+function onReachEnd(): void {
+  if (props.items.length) requestMore()
+}
+
+// 首屏行数不足以撑满容器时不会产生滚动事件，此时也需要继续加载。
+// 只在 items.length 变化后检查一次，因此不受节流限制。
+function ensureViewportFilled(): void {
+  const el = (container.value?.firstElementChild as HTMLElement | null) ?? null
+  if (!el || !props.items.length) return
+  if (el.scrollHeight <= el.clientHeight + rowHeight.value) requestMore(true)
+}
+
+watch(
+  () => props.items.length,
+  () => {
+    void nextTick(ensureViewportFilled)
+  },
+)
 
 interface Cell {
   asset: Asset
@@ -100,6 +131,7 @@ const rows = computed<Row[]>(() => {
       :item-size="rowHeight"
       key-field="id"
       :buffer="600"
+      @scroll-end="onReachEnd"
     >
       <template #default="{ item }">
         <div

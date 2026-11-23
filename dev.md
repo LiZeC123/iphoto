@@ -287,6 +287,7 @@ CREATE TABLE operations (
 - 过滤支持的扩展名：`.jpg .jpeg .png`（大小写不敏感）。
 - 跳过隐藏文件、系统文件、符号链接（避免循环）。
 - 扫描结果先去重（同一路径只处理一次），再进入导入。
+- **不支持的文件必须显式报告**：统计总数、按后缀（含「无后缀」）计数，并列出最多 100 个相对路径；扫描接口与导入进度/批次统计都返回该信息，CSV 报告也会追加 `unsupported` 行，避免文件被静默忽略。
 
 ### 5.3 导入流程
 
@@ -393,8 +394,9 @@ CREATE TABLE operations (
 
 ### 9.3 侧边栏时间导航
 
-- 自动聚合 `assets` 中有效时间非空的年月，列出“2023 年 1 月”入口。
-- 点击 = 临时筛选该年月，不创建相册。
+- 自动聚合 `assets` 中有效时间非空的年月。
+- 导航分两行：第一行是年份（含「全部」），第二行是所选年份的月份（含「全年」）；选项数从 `年 × 月` 降为 `年 + 月`，避免时间跨度大时按钮爆炸。
+- 点击 = 临时筛选该年/该年月，不创建相册。
 - 时间导航与标签筛选可组合：先点年月，再点标签，结果取 AND。
 - 用户可把当前组合“另存为智能相册”。
 
@@ -404,15 +406,26 @@ CREATE TABLE operations (
 
 ### 10.1 图片搜索
 
-范围：
+范围（默认任意字段）：
 
 - `assets.original_name`
 - `assets.note`
-- `tags.name`
+- `tags.name`（标签名）
 
-SQL 用 `LIKE '%kw%'`，`DISTINCT` 去重。10k 量级足够，不引入 FTS5。
+SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签。10k 量级足够，不引入 FTS5。
 
-结果排序：标签/文件名命中优先，描述命中其次；同权重按有效时间倒序。
+**搜索语法**（`internal/search`，前后端一致）：
+
+- 空白即隐式 `AND`，也支持 `AND` / `OR`（大小写不敏感）。
+- `NOT` 或前缀 `-` 取反，例如 `-截图`。
+- 括号分组，例如 `(tag:旅行 OR tag:出差) AND NOT name:截图`。
+- 引号短语，例如 `"beach day"`；引号内的 `AND/OR/NOT` 按字面值处理。
+- 字段前缀：`name:`（同 `file:`）只匹配文件名、`note:` 只匹配备注、`tag:` 只匹配标签名；`tag:"长途 旅行"` 支持带空格的标签。
+- 无法解析的表达式返回 400，并提示具体位置/原因。
+
+未标记标签的图片可用 `untagged=1` 筛选；标签列表接口同时返回 `untagged_count` 供标签页固定首项展示。
+
+结果排序：默认按有效时间倒序（与原实现一致），可用 `sort` 切换。
 
 ### 10.2 相册搜索
 
@@ -434,9 +447,11 @@ SQL 用 `LIKE '%kw%'`，`DISTINCT` 去重。10k 量级足够，不引入 FTS5。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/assets` | 分页/筛选查询，参数：`q, tag, from, to, album, status, sort, page, page_size` |
+| GET | `/api/assets` | 分页/筛选查询，参数：`q, tag, untagged, from, to, status, sort, page, page_size`（`q` 支持 10.1 的布尔语法） |
 | GET | `/api/assets/{hash}` | 单张详情 |
 | PATCH | `/api/assets/{hash}` | 更新 `note`、`taken_at_override`、`original_name`（可选） |
+| POST | `/api/assets/{hash}/rename` | 重命名：同步数据库（original_name/storage_name/rel_path）与 CAS 文件 |
+| POST | `/api/assets/{hash}/reveal` | 在系统文件浏览器中显示图片所在目录（macOS `open -R` / Windows `explorer /select,` / Linux `xdg-open`） |
 | DELETE | `/api/assets/{hash}` | 软删除到回收站 |
 | POST | `/api/assets/batch/tags` | 批量加/移除标签，body: `{hashes:[], add_tags:[], remove_tags:[]}` |
 | POST | `/api/assets/batch/delete` | 批量软删除 |
@@ -471,7 +486,7 @@ SQL 用 `LIKE '%kw%'`，`DISTINCT` 去重。10k 量级足够，不引入 FTS5。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/import/scan` | 验证路径、递归统计文件数，body: `{path}` |
+| POST | `/api/import/scan` | 验证路径、递归统计文件数，body: `{path}`；返回 `total/unreadable/unsupported`（含后缀分布与最多 100 个文件） |
 | POST | `/api/import/start` | 开始导入，body: `{path}`，返回 `batch_id` |
 | GET | `/api/import/{batch_id}/progress` | 进度（轮询） |
 | POST | `/api/import/{batch_id}/cancel` | 取消 |
@@ -487,6 +502,7 @@ SQL 用 `LIKE '%kw%'`，`DISTINCT` 去重。10k 量级足够，不引入 FTS5。
 | GET | `/api/timeline/months` | 有图片的年月列表及计数 |
 | GET | `/api/settings` | 读取设置 |
 | PUT | `/api/settings` | 更新设置（仅 app_settings 中的键） |
+| POST | `/api/shutdown` | 关闭服务，body: `{confirm:true}`；先写回响应再优雅退出（取消导入 → 关闭 HTTP → 释放端口） |
 | GET | `/api/trash` | 回收站列表 |
 | POST | `/api/trash/restore` | 恢复，body: `{hashes:[]}` |
 | POST | `/api/trash/empty` | 清空回收站 |
@@ -518,7 +534,8 @@ SQL 用 `LIKE '%kw%'`，`DISTINCT` 去重。10k 量级足够，不引入 FTS5。
    - 普通：网格、添加/移除成员、导出。
    - 智能：展示规则、动态结果、编辑规则、导出。
 5. **标签管理页**
-   - 标签列表、计数、重命名、删除。
+   - 标签搜索（按名称实时筛选）、计数、重命名、删除。
+   - 列表首项固定为「未标记任何标签」，点击跳到图库的 `untagged=1` 筛选，便于排查漏标图片。
 6. **导入页**
    - 路径输入框（记住上次）、扫描预览（含递归统计）、开始导入、进度条、重复对比列表、报告导出。
 7. **回收站页**
@@ -528,9 +545,14 @@ SQL 用 `LIKE '%kw%'`，`DISTINCT` 去重。10k 量级足够，不引入 FTS5。
    - 时间解析规则管理。
    - 清理导入历史。
    - 完整性校验入口。
+   - 「关闭 iphoto 服务」：显式走优雅关闭（信号机制在 Windows 关闭窗口时不可靠）。
 9. **图片查看器**（覆盖层，非独立页面）
-   - PhotoSwipe，支持上一张/下一张、缩放、全屏、键盘快捷键。
+   - PhotoSwipe，支持上一张/下一张、缩放、全屏；最大缩放按适配尺寸放宽（约 8×，且至少 4× 原图）。
+   - 缩放控件位于右上角工具栏，与 PhotoSwipe 自带的缩放、关闭按钮同排：`−` / `+` / `1:1`。
+   - 键盘快捷键：`Z` 切换缩放（PhotoSwipe 自带）、`A` 上一张、`S` 下一张、`D` 删除当前图片（移入回收站后自动切到下一张）；在输入框/备注等编辑区域中不触发。
    - 侧栏显示文件名、路径、尺寸、时间、标签编辑、描述编辑。
+   - 支持重命名（同步数据库与库内文件，扩展名不可修改）、在系统文件浏览器中显示所在目录。
+   - 删除后自动切到下一张；已是最后一张时退出查看器。
 
 ### 12.2 状态管理
 
@@ -542,6 +564,8 @@ SQL 用 `LIKE '%kw%'`，`DISTINCT` 去重。10k 量级足够，不引入 FTS5。
 ### 12.3 虚拟滚动
 
 用 `vue-virtual-scroller` 的 `RecycleScroller` 或 `DynamicScroller`，网格按行虚拟化。若库不适合网格，改为自己实现窗口化，但优先用库。
+
+加载策略：首屏分页（图库 200、时间线 300、相册 200），滚动到可视区最后一行时自动请求下一批（`scroll-end` + 视口未填满兜底），不再需要手动点「加载更多」。
 
 ### 12.4 前端构建
 

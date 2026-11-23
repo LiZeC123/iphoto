@@ -2,7 +2,8 @@ import { api } from './client'
 import type { Tag } from './types'
 
 export const tagsApi = {
-  list: () => api.get<{ items: Tag[]; total: number }>('/tags'),
+  list: () =>
+    api.get<{ items: Tag[]; total: number; untagged_count: number }>('/tags'),
   create: (name: string) => api.post<Tag>('/tags', { name }),
   rename: (id: number, name: string) => api.patch<Tag>(`/tags/${id}`, { name }),
   remove: (id: number) => api.delete<{ deleted: number }>(`/tags/${id}`),

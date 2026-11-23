@@ -22,7 +22,7 @@ var allowedStatuses = map[string]bool{
 	"importing": true, "ready": true, "trashed": true, "missing": true,
 }
 
-// listAssets 支持 q / status / from / to / sort / page / page_size。
+// listAssets 支持 q / tag / untagged / status / from / to / sort / page / page_size。
 func (h *handler) listAssets(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	status := strings.TrimSpace(q.Get("status"))
@@ -44,6 +44,7 @@ func (h *handler) listAssets(w http.ResponseWriter, r *http.Request) {
 	pageResult, err := h.opts.Store.ListAssets(r.Context(), store.AssetFilter{
 		Q:        q.Get("q"),
 		Tag:      q.Get("tag"),
+		Untagged: isTrue(q.Get("untagged")),
 		Status:   status,
 		From:     q.Get("from"),
 		To:       q.Get("to"),
@@ -52,10 +53,24 @@ func (h *handler) listAssets(w http.ResponseWriter, r *http.Request) {
 		PageSize: pageSize,
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrSearchSyntax) {
+			h.fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		h.fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	h.ok(w, pageResult)
+}
+
+// isTrue 接受 1/true/yes/on（大小写不敏感）作为布尔真值。
+func isTrue(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 type assetDetail struct {
@@ -127,6 +142,39 @@ func (h *handler) patchAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.ok(w, a)
+}
+
+// renameAsset 重命名图片：同步更新数据库记录与库内物理文件名。
+func (h *handler) renameAsset(w http.ResponseWriter, r *http.Request) {
+	hash := r.PathValue("hash")
+	if !importer.ValidateHash(hash) {
+		h.fail(w, http.StatusBadRequest, "哈希格式非法")
+		return
+	}
+	if h.opts.Importer == nil {
+		h.fail(w, http.StatusServiceUnavailable, "导入服务未初始化")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		h.fail(w, http.StatusBadRequest, "请求体非法: "+err.Error())
+		return
+	}
+	asset, err := h.opts.Importer.Rename(r.Context(), hash, body.Name)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			h.assetError(w, err)
+		case errors.Is(err, importer.ErrInvalidName):
+			h.fail(w, http.StatusBadRequest, err.Error())
+		default:
+			h.fail(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	h.ok(w, asset)
 }
 
 func (h *handler) deleteAsset(w http.ResponseWriter, r *http.Request) {

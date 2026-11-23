@@ -15,7 +15,12 @@ func (h *handler) listTags(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.ok(w, map[string]any{"items": tags, "total": len(tags)})
+	untagged, err := h.opts.Store.CountUntagged(r.Context())
+	if err != nil {
+		h.fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.ok(w, map[string]any{"items": tags, "total": len(tags), "untagged_count": untagged})
 }
 
 func (h *handler) createTag(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { errorMessage } from '@/api/settings'
 import { trashApi } from '@/api/trash'
@@ -16,6 +16,9 @@ const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 const selected = ref(new Set<string>())
+const sentinel = ref<HTMLElement | null>(null)
+
+let observer: IntersectionObserver | undefined
 
 const selectedCount = computed(() => selected.value.size)
 const loadedAll = computed(() => items.value.length >= total.value)
@@ -35,6 +38,11 @@ async function load(reset = true): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+function loadMore(): void {
+  if (loading.value || loadedAll.value) return
+  void load(false)
 }
 
 function toggle(hash: string): void {
@@ -87,6 +95,17 @@ async function emptyTrash(): Promise<void> {
 
 onMounted(() => {
   void load()
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadMore()
+    },
+    { rootMargin: '240px' },
+  )
+  if (sentinel.value) observer.observe(sentinel.value)
+})
+
+onBeforeUnmount(() => {
+  observer?.disconnect()
 })
 </script>
 
@@ -141,10 +160,12 @@ onMounted(() => {
       <p>删除的图片会先放在这里，可随时恢复。</p>
     </div>
 
-    <div class="load-more">
-      <button v-if="items.length && !loadedAll" class="btn" :disabled="loading" @click="load(false)">
-        {{ loading ? '加载中…' : `加载更多（已显示 ${items.length}/${total}）` }}
-      </button>
+    <div ref="sentinel" class="load-more">
+      <span v-if="loading" class="dim">加载中…</span>
+      <span v-else-if="items.length && !loadedAll" class="dim">
+        继续向下滚动自动加载（已显示 {{ items.length }}/{{ total }}）
+      </span>
+      <span v-else-if="items.length" class="dim">已加载全部 {{ total }} 张</span>
     </div>
   </PageShell>
 </template>

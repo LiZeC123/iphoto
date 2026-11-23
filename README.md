@@ -11,16 +11,16 @@
 
 已完成功能：
 
-- **导入**：递归扫描、SHA-256 去重、CAS 两级目录、复制后大小校验、3 worker 并发、批次串行、取消、重复项（跳过/替换）、CSV 报告、启动时修复中断导入。
-- **浏览**：图库网格（按行虚拟滚动）、文件名/描述搜索、年月范围筛选、排序、分页加载。
-- **查看**：PhotoSwipe 查看器、上一张/下一张、缩放、键盘快捷键、详情侧栏（备注、拍摄时间覆盖、删除）。
-- **时间线**：按年月聚合导航，点击年月筛选。
-- **标签**：创建/重命名/删除、批量打标签、标签筛选、侧边栏快捷入口。
+- **导入**：递归扫描、SHA-256 去重、CAS 两级目录、复制后大小校验、3 worker 并发、批次串行、取消、重复项（跳过/替换）、CSV 报告、启动时修复中断导入；**不支持的文件会被显式报告**（总数、按后缀计数、最多 100 个文件明细，CSV 同步）。
+- **浏览**：图库网格（按行虚拟滚动）、文件名/描述/**标签**搜索（支持 `AND`/`OR`/`NOT`、括号、引号短语与 `name:`/`note:`/`tag:` 字段前缀）、年月范围筛选、排序、**滚动到底部自动加载**。
+- **查看**：PhotoSwipe 查看器、上一张/下一张、**进一步放大（右上角工具栏 `−` / `+` / `1:1`）**、快捷键（`Z` 缩放、`A` 上一张、`S` 下一张、`D` 删除）、详情侧栏（备注、拍摄时间覆盖、**重命名（同步数据库与文件）**、**在系统文件浏览器中显示**、删除后**自动切到下一张**，最后一张删除后退出）。
+- **时间线**：按年/月两行聚合导航（选项数从 m×n 降为 m+n），点击年或年月筛选。
+- **标签**：标签搜索、首项固定「未标记任何标签」快速排查漏标、重命名/删除、批量打标签、标签筛选、侧边栏快捷入口。
 - **相册**：普通相册（成员增删、封面自动取首图）、智能相册（`and` + `tag` + `time_range` 动态查询）、相册搜索。
 - **缩略图**：384px 后台队列，按需触发重建，按哈希命名可长期缓存。
 - **回收站**：软删除、列表、批量恢复（文件移回原 rel_path）、清空（二次确认）。
 - **导出**：批量/相册导出到 `runtime/exports/<名称>/`（只允许在导出目录下建子目录），文件名冲突自动加 `__hash8`，复制后校验大小。
-- **设置**：运行信息与备份说明、时间解析规则增删改/启停/正则测试、完整性校验（缺失/大小/哈希/孤儿文件）、导入历史清理。
+- **设置**：运行信息与备份说明、时间解析规则增删改/启停/正则测试、完整性校验（缺失/大小/哈希/孤儿文件）、导入历史清理、**手动关闭服务（优雅退出，跨平台）**。
 - **运维**：`/api/health`、10MB 滚动日志、固定端口/路径、源文件只读、跨平台构建（`make release`）。
 
 ## 技术栈
@@ -46,13 +46,14 @@ iphoto/
 │   ├── config/                # 端口、目录常量与路径解析
 │   ├── logging/               # slog + 按大小滚动
 │   ├── store/                 # SQLite：assets/tags/albums/imports/smart 规则
-│   ├── importer/              # 扫描、哈希、CAS、导入管理器
+│   ├── importer/              # 扫描、哈希、CAS、导入管理器、重命名
+│   ├── search/                # 图库搜索表达式解析（AND/OR/NOT/括号/字段前缀）
 │   ├── timeparse/             # EXIF → 文件名规则 → mtime → 导入时间
 │   ├── thumbs/                # 缩略图后台队列
 │   ├── maintenance/           # 启动时中断修复
 │   └── httpapi/               # 全部 /api 路由 + SPA 托管
 ├── web/
-│   ├── src/components/        # AssetGrid（虚拟滚动）、PhotoViewer、AssetThumb
+│   ├── src/components/        # AssetGrid（虚拟滚动+自动加载）、PhotoViewer、AssetThumb、UnsupportedReport
 │   ├── src/views/             # 图库/时间线/相册/详情/标签/导入/回收站/设置
 │   └── dist/.gitkeep          # 占位；make web-build 生成真实产物
 └── scripts/{env,verify-env}.sh
@@ -79,21 +80,19 @@ make dev-web               # http://127.0.0.1:5173（/api 代理到后端）
 
 首次使用：打开「导入」页，输入本地照片目录绝对路径 → 扫描 → 开始导入。支持 jpg/jpeg/png，递归子目录，跳过隐藏文件与符号链接。
 
-## API 概览
+## 搜索语法
 
-统一前缀 `/api`，错误返回 `{"error":"..."}`。
+图库搜索框在文件名、备注、标签名中做子串匹配，并支持布尔组合：
 
-| 资源 | 端点 |
+| 写法 | 含义 |
 |---|---|
-| 资产 | `GET /assets`（q/tag/from/to/sort/page）、`GET|PATCH|DELETE /assets/{hash}`、`GET /assets/{hash}/file`（Range）、`GET /assets/{hash}/thumb`、`GET /assets/{hash}/tags`、`POST /assets/batch/tags`、`POST /assets/batch/delete` |
-| 标签 | `GET|POST /tags`、`PATCH|DELETE /tags/{id}`、`POST /tags/summary`（所选图片的标签覆盖统计） |
-| 相册 | `GET|POST /albums`、`GET|PATCH|DELETE /albums/{id}`、`GET|POST|DELETE /albums/{id}/items`（支持 `from`/`to`）、`GET /albums/{id}/months` |
-| 回收站/导出 | `GET /trash`、`POST /trash/restore|empty`、`POST /assets/batch/export`（`subdir` 必填，导出到 `runtime/exports/<subdir>`） |
-| 时间规则 | `GET|POST /time-rules`、`PATCH|DELETE /time-rules/{id}`、`POST /time-rules/test` |
-| 导入 | `POST /import/scan|start`（`start` 可带 `tags`）、`GET /import/active`、`GET /import/{id}/progress`、`POST /import/{id}/cancel`、`GET /import/{id}/duplicates`、`POST /import/{id}/duplicates/resolve`、`GET /import/{id}/report.csv`、`POST /import/{id}/cleanup` |
-| 其他 | `GET /timeline/months`、`GET|PUT /settings`、`POST /settings/verify`、`GET /import/batches`、`GET /health` |
+| `旅行 海边` / `旅行 AND 海边` | 同时满足（空白即隐式 AND） |
+| `旅行 OR 海边` | 任一满足 |
+| `NOT 截图` / `-截图` | 取反 |
+| `(tag:旅行 OR tag:出差) AND NOT name:截图` | 括号分组 |
+| `tag:"长途 旅行"` | 字段 + 引号短语 |
 
-分页统一 `{items,total,page,page_size}`；`page_size` 默认 100、上限 500。
+字段前缀：`name:`（同 `file:`）、`note:`、`tag:`；不写时匹配三者。关键字大小写不敏感，若要把 `AND`/`OR`/`NOT` 当普通词搜索请加引号。表达式无法解析时接口返回 400，页面会直接显示原因。
 
 ## 导入前预检时间解析
 

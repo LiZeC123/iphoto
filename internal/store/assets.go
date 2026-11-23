@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"iphoto/internal/search"
 )
 
 // TimeLayout 是库内存储的本地时间格式（无时区），见 dev.md 4.1。
@@ -212,9 +214,10 @@ func (s *Store) ListAssetsByStatus(ctx context.Context, status string) ([]Asset,
 
 // AssetFilter 是图库列表的查询条件。
 type AssetFilter struct {
-	Q        string
+	Q        string // 搜索表达式（AND/OR/NOT/括号/字段前缀），见 internal/search
 	Status   string
 	Tag      string // 标签名（大小写不敏感）或标签 ID
+	Untagged bool   // 只返回没有任何标签的图片
 	From     string // YYYY / YYYY-MM / YYYY-MM-DD
 	To       string
 	Sort     string
@@ -267,10 +270,19 @@ func (s *Store) ListAssets(ctx context.Context, f AssetFilter) (AssetPage, error
 			WHERE at.hash = a.hash AND (t.name = ? COLLATE NOCASE OR CAST(t.id AS TEXT) = ?))`)
 		args = append(args, tag, tag)
 	}
+	if f.Untagged {
+		where = append(where, `NOT EXISTS (SELECT 1 FROM asset_tags at WHERE at.hash = a.hash)`)
+	}
 	if q := strings.TrimSpace(f.Q); q != "" {
-		like := likePattern(q)
-		where = append(where, `(a.original_name LIKE ? ESCAPE '\' OR COALESCE(a.note, '') LIKE ? ESCAPE '\')`)
-		args = append(args, like, like)
+		node, err := search.Parse(q)
+		if err != nil {
+			return AssetPage{}, fmt.Errorf("%w: %s", ErrSearchSyntax, err.Error())
+		}
+		if node != nil {
+			clause, clauseArgs := buildSearchWhere(node)
+			where = append(where, clause)
+			args = append(args, clauseArgs...)
+		}
 	}
 	if from, ok := rangeStart(f.From); ok {
 		where = append(where, effectiveTimeExpr+" >= ?")

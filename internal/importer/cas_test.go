@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestPlanTargetAndCopyBlob(t *testing.T) {
@@ -89,5 +90,19 @@ func TestSanitizeName(t *testing.T) {
 		if got != want {
 			t.Errorf("sanitizeName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestSanitizeNameTruncatesUTF8Safely(t *testing.T) {
+	name := strings.Repeat("图", 100) + ".png" // 300 字节 + 扩展名，超过 180 字节上限
+	got := sanitizeName(name, strings.Repeat("a", 64))
+	if !utf8.ValidString(got) {
+		t.Fatalf("截断后不是合法 UTF-8: %q", got)
+	}
+	if len(got) > 180 {
+		t.Fatalf("截断后长度 = %d, want <= 180", len(got))
+	}
+	if filepath.Ext(got) != ".png" {
+		t.Fatalf("扩展名丢失: %q", got)
 	}
 }

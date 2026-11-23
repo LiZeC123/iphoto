@@ -79,6 +79,11 @@ async function loadMonths(): Promise<void> {
   }
 }
 
+function loadMore(): void {
+  if (loading.value || loadedAll.value) return
+  void load(false)
+}
+
 function selectMonth(value: string): void {
   if (month.value === value) return
   month.value = value
@@ -257,6 +262,7 @@ onMounted(() => {
       :selected="selected"
       @open="openViewer"
       @pick="onPick"
+      @load-more="loadMore"
     >
       <template #empty>
         <div class="empty">
@@ -268,9 +274,10 @@ onMounted(() => {
     </AssetGrid>
 
     <div class="load-more">
-      <button v-if="items.length && !loadedAll" class="btn" :disabled="loading" @click="load(false)">
-        {{ loading ? '加载中…' : `加载更多（已显示 ${items.length}/${total}）` }}
-      </button>
+      <span v-if="loading" class="dim">加载中…</span>
+      <span v-else-if="items.length && !loadedAll" class="dim">
+        继续向下滚动自动加载（已显示 {{ items.length }}/{{ total }}）
+      </span>
     </div>
 
     <div v-if="selectable && !isSmart" class="batch-bar">

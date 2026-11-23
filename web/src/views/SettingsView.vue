@@ -26,6 +26,8 @@ const verifying = ref(false)
 const report = ref<VerifyReport | null>(null)
 
 const busy = ref(false)
+const shuttingDown = ref(false)
+const shutdownRequested = ref(false)
 
 async function loadHealth(): Promise<void> {
   try {
@@ -134,6 +136,31 @@ async function cleanupBatch(batch: ImportBatch): Promise<void> {
   }
 }
 
+async function shutdownService(): Promise<void> {
+  if (
+    !window.confirm(
+      '关闭 iphoto 服务？进行中的导入会被取消，当前页面稍后将无法继续使用，需要重新启动程序才能恢复访问。',
+    )
+  ) {
+    return
+  }
+  shuttingDown.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    await settingsApi.shutdown()
+    shutdownRequested.value = true
+  } catch (err) {
+    error.value = errorMessage(err)
+  } finally {
+    shuttingDown.value = false
+  }
+}
+
+function reloadPage(): void {
+  window.location.reload()
+}
+
 onMounted(async () => {
   await Promise.all([loadHealth(), loadRules(), loadBatches()])
 })
@@ -240,6 +267,19 @@ onMounted(async () => {
     </section>
 
     <section class="panel">
+      <div class="panel-head"><h2>关闭服务</h2></div>
+      <p class="hint dim">
+        通过信号（Ctrl+C / 关闭终端）退出在部分平台并不可靠，Windows 上直接关闭窗口还可能跳过优雅关闭。
+        这里的按钮会显式走优雅关闭：先取消进行中的导入并等待收尾，再停止 HTTP 服务、释放端口与数据库连接。
+      </p>
+      <div class="toolbar">
+        <button class="btn btn-danger" :disabled="shuttingDown" @click="shutdownService">
+          {{ shuttingDown ? '正在关闭…' : '关闭 iphoto 服务' }}
+        </button>
+      </div>
+    </section>
+
+    <section class="panel">
       <div class="panel-head">
         <h2>导入历史</h2>
         <button class="btn btn-sm" @click="loadBatches">刷新</button>
@@ -263,6 +303,18 @@ onMounted(async () => {
       </table>
       <p v-else class="dim">暂无导入记录。</p>
     </section>
+
+    <Teleport to="body">
+      <div v-if="shutdownRequested" class="shutdown-mask">
+        <div class="shutdown-card">
+          <h2>服务已关闭</h2>
+          <p>现在可以关闭此页面。下次使用请重新启动 iphoto。</p>
+          <div class="toolbar">
+            <button class="btn" @click="reloadPage">重新加载</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </PageShell>
 </template>
 
@@ -334,5 +386,38 @@ onMounted(async () => {
 .mono.input {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+
+.shutdown-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 100003;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 9, 12, 0.78);
+}
+
+.shutdown-card {
+  width: min(420px, 90vw);
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  text-align: center;
+}
+
+.shutdown-card h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.shutdown-card p {
+  margin: 0 0 16px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.shutdown-card .toolbar {
+  justify-content: center;
 }
 </style>

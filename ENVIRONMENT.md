@@ -82,7 +82,36 @@ make build            PASS → bin/iphoto（约 11MB，内嵌前端）
 | 时间预检 CLI | `iphoto-timecheck` 文本/JSON 输出、无数据库回退内置规则均正常 |
 | 导出限制 | `subdir` 必填且禁止路径分隔符；只写入 `runtime/exports/<subdir>` |
 
-### 3.3 浏览器验收
+### 3.3 M5 扩展功能复验（2026-11-23）
+
+```text
+gofmt -l cmd internal web   无输出
+go vet ./...                PASS
+go test ./...               PASS（新增 search 解析、搜索语法/untagged、扫描不支持文件、重命名等用例）
+npm run typecheck           PASS
+npm run build               PASS
+make build                  PASS（内嵌前端）
+```
+
+API 端到端（临时 `IPHOTO_BASE_DIR=/tmp/iphoto-e2e`，脚本化验证）：
+
+| 场景 | 结果 |
+|---|---|
+| 扫描混合目录（含 `.txt` / `.mp4` / `.heic` / 无后缀） | `unsupported.total=4`，按后缀计数正确，列出 4 个相对路径，`truncated=false` |
+| 导入进度 / 重启后读取批次 | `unsupported` 统计存在且从 `stats_json` 恢复 |
+| CSV 报告 | 追加 `unsupported` 行（绝对路径 + 后缀） |
+| 搜索 `旅行` / `tag:旅行` / `NOT tag:旅行` / `-旅行` / `a OR b` / `(…) AND …` | 命中符合预期；默认搜索匹配标签名 |
+| 非法表达式 `a AND` | HTTP 400 |
+| `GET /api/assets?untagged=1`、`GET /api/tags` | 未标记筛选与 `untagged_count` 正确 |
+| `POST /assets/{hash}/rename` | DB（original_name/storage_name/rel_path）与磁盘文件同步；改扩展名/非法字符返回 400 |
+| `POST /assets/{hash}/reveal` | 通过 PATH shim 断言实际执行 `open -R <绝对路径>`；文件缺失返回 404 |
+| `POST /api/shutdown` | 返回 `shutting_down` → 进程退出，日志含「收到页面关闭请求」「已退出」 |
+
+UI（时间线两行导航、标签页搜索+固定首项、自动加载、查看器新控件）按项目约定仍由用户在真实浏览器验收。
+
+2026-11-23 用户验收通过；随后按要求调整：缩放控件从左侧详情面板移到 PhotoSwipe 右上角工具栏（与自带缩放、关闭同排），并新增 `A` 上一张 / `S` 下一张 / `D` 删除快捷键（保留 `Z` 缩放）。`npm run typecheck`、`npm run build` 复验通过，细节仍由用户浏览器验收。
+
+### 3.4 浏览器验收
 
 2026-11-22 首轮 M1 UI（图库 + 导入页）由用户在浏览器验收通过。
 此后新增的 M2/M3/M4 界面（查看器、时间线、标签页、相册页/详情、回收站、设置页、批量操作）以 `typecheck` + `vite build` + API 端到端为准，**等待用户浏览器验收**。

@@ -27,6 +27,8 @@ type Options struct {
 	Logger   *slog.Logger
 	Importer *importer.Manager
 	Thumbs   *thumbs.Queue
+	// Shutdown 由 main 注入，用于设置页的「关闭服务」按钮触发优雅退出。
+	Shutdown func()
 }
 
 type handler struct {
@@ -43,6 +45,7 @@ func New(opts Options) http.Handler {
 	mux.HandleFunc("GET /api/settings", h.getSettings)
 	mux.HandleFunc("POST /api/settings/verify", h.verifyLibrary)
 	mux.HandleFunc("PUT /api/settings", h.putSettings)
+	mux.HandleFunc("POST /api/shutdown", h.shutdown)
 
 	mux.HandleFunc("GET /api/assets", h.listAssets)
 	mux.HandleFunc("POST /api/assets/batch/tags", h.batchTags)
@@ -50,6 +53,8 @@ func New(opts Options) http.Handler {
 	mux.HandleFunc("POST /api/assets/batch/delete", h.batchDelete)
 	mux.HandleFunc("GET /api/assets/{hash}", h.getAsset)
 	mux.HandleFunc("PATCH /api/assets/{hash}", h.patchAsset)
+	mux.HandleFunc("POST /api/assets/{hash}/rename", h.renameAsset)
+	mux.HandleFunc("POST /api/assets/{hash}/reveal", h.revealAsset)
 	mux.HandleFunc("DELETE /api/assets/{hash}", h.deleteAsset)
 	mux.HandleFunc("GET /api/assets/{hash}/file", h.assetFile)
 	mux.HandleFunc("GET /api/assets/{hash}/thumb", h.assetThumb)

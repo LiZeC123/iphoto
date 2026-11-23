@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -76,5 +77,74 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("写入文件: %v", err)
+	}
+}
+
+func TestScanReportsUnsupported(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "a.jpg"), "a")
+	writeFile(t, filepath.Join(root, "notes.txt"), "n")
+	writeFile(t, filepath.Join(root, "sub", "clip.mp4"), "m")
+	writeFile(t, filepath.Join(root, "sub", "noext"), "x")
+	// 隐藏文件按约定跳过，不计入「类型不支持」。
+	writeFile(t, filepath.Join(root, ".hidden.txt"), "h")
+
+	scan, err := Scan(root)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if scan.Total != 1 {
+		t.Fatalf("Total = %d, want 1", scan.Total)
+	}
+	if scan.Unsupported.Total != 3 {
+		t.Fatalf("Unsupported.Total = %d, want 3 (%+v)", scan.Unsupported.Total, scan.Unsupported)
+	}
+	if scan.Unsupported.Truncated {
+		t.Fatal("未超上限时 Truncated 应为 false")
+	}
+	gotByExt := map[string]int{}
+	for _, e := range scan.Unsupported.ByExt {
+		gotByExt[e.Ext] = e.Count
+	}
+	wantByExt := map[string]int{".txt": 1, ".mp4": 1, "(无后缀)": 1}
+	if len(gotByExt) != len(wantByExt) {
+		t.Fatalf("ByExt = %+v", gotByExt)
+	}
+	for ext, want := range wantByExt {
+		if gotByExt[ext] != want {
+			t.Errorf("ByExt[%q] = %d, want %d", ext, gotByExt[ext], want)
+		}
+	}
+	wantFiles := map[string]bool{"notes.txt": true, "sub/clip.mp4": true, "sub/noext": true}
+	if len(scan.Unsupported.Files) != len(wantFiles) {
+		t.Fatalf("Files = %v", scan.Unsupported.Files)
+	}
+	for _, f := range scan.Unsupported.Files {
+		if !wantFiles[f] {
+			t.Errorf("意外的文件: %q", f)
+		}
+	}
+}
+
+func TestScanUnsupportedFileListCapped(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < UnsupportedFileListLimit+5; i++ {
+		writeFile(t, filepath.Join(root, "file-"+strconv.Itoa(i)+".txt"), "x")
+	}
+	scan, err := Scan(root)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if scan.Unsupported.Total != UnsupportedFileListLimit+5 {
+		t.Fatalf("Total = %d", scan.Unsupported.Total)
+	}
+	if len(scan.Unsupported.Files) != UnsupportedFileListLimit {
+		t.Fatalf("Files 长度 = %d, want %d", len(scan.Unsupported.Files), UnsupportedFileListLimit)
+	}
+	if !scan.Unsupported.Truncated {
+		t.Fatal("超过上限时 Truncated 应为 true")
+	}
+	if scan.Unsupported.ByExt[0].Ext != ".txt" || scan.Unsupported.ByExt[0].Count != UnsupportedFileListLimit+5 {
+		t.Fatalf("ByExt = %+v", scan.Unsupported.ByExt)
 	}
 }

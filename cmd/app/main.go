@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -76,6 +77,13 @@ func run(noBrowser bool) error {
 
 	manager := importer.NewManager(st, paths, queue, logger)
 
+	// 设置页的「关闭服务」通过该通道触发与信号一致的优雅退出路径。
+	shutdownCh := make(chan struct{})
+	var shutdownOnce sync.Once
+	requestShutdown := func() {
+		shutdownOnce.Do(func() { close(shutdownCh) })
+	}
+
 	handler := httpapi.New(httpapi.Options{
 		Store:    st,
 		Paths:    paths,
@@ -84,6 +92,7 @@ func run(noBrowser bool) error {
 		Logger:   logger,
 		Importer: manager,
 		Thumbs:   queue,
+		Shutdown: requestShutdown,
 	})
 
 	addr := net.JoinHostPort(config.BindAddr, strconv.Itoa(config.Port))
@@ -115,11 +124,21 @@ func run(noBrowser bool) error {
 	select {
 	case <-ctx.Done():
 		logger.Info("收到退出信号，正在关闭")
+	case <-shutdownCh:
+		logger.Info("收到页面关闭请求，正在关闭")
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("http 服务异常: %w", err)
 		}
 		return nil
+	}
+
+	// 优雅关闭：先取消进行中的导入并等待其收尾，再关闭 HTTP 服务。
+	if batchID := manager.CancelActive(); batchID != 0 {
+		logger.Info("正在取消进行中的导入批次", "batch", batchID)
+		if !manager.WaitIdle(3 * time.Second) {
+			logger.Warn("导入批次未在 3 秒内结束，继续关闭（启动时会做中断修复）", "batch", batchID)
+		}
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
