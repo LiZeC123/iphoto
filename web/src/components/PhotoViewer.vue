@@ -127,7 +127,7 @@ function openViewer(index = props.startIndex): void {
     ui.registerElement({
       name: 'iphotoZoomOut',
       className: 'iphoto-zoom',
-      title: '缩小',
+      title: '缩小（S）',
       ariaLabel: '缩小',
       order: 8,
       isButton: true,
@@ -137,7 +137,7 @@ function openViewer(index = props.startIndex): void {
     ui.registerElement({
       name: 'iphotoZoomIn',
       className: 'iphoto-zoom',
-      title: '放大（也可滚轮 / 双击图片）',
+      title: '放大（W，也可滚轮 / 双击图片）',
       ariaLabel: '放大',
       order: 9,
       isButton: true,
@@ -279,7 +279,7 @@ async function remove(): Promise<void> {
   }
 }
 
-// ---- 键盘快捷键：A 上一张 / S 下一张 / D 删除（Z 缩放由 PhotoSwipe 自带） ----
+// ---- 键盘快捷键：A 上一张 / D 下一张 / W 放大 / S 缩小 / Q 退出 / G 删除 ----
 
 function isTypingTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null
@@ -290,7 +290,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 function onKeydown(event: KeyboardEvent): void {
   if (!props.open || !pswp || pswp.isDestroying) return
-  if (event.defaultPrevented) return
+  if (event.defaultPrevented || event.isComposing) return
   if (event.metaKey || event.ctrlKey || event.altKey) return
   if (isTypingTarget(event.target)) return
   switch (event.key.toLowerCase()) {
@@ -298,11 +298,23 @@ function onKeydown(event: KeyboardEvent): void {
       event.preventDefault()
       pswp.prev()
       break
-    case 's':
+    case 'd':
       event.preventDefault()
       pswp.next()
       break
-    case 'd':
+    case 'w':
+      event.preventDefault()
+      zoomBy(1.5)
+      break
+    case 's':
+      event.preventDefault()
+      zoomBy(1 / 1.5)
+      break
+    case 'q':
+      event.preventDefault()
+      pswp.close()
+      break
+    case 'g':
       // 屏蔽长按产生的重复事件，避免连续删除多张。
       if (event.repeat) return
       event.preventDefault()
@@ -409,7 +421,8 @@ onBeforeUnmount(destroy)
         </label>
         <p class="hint dim">留空则使用自动解析时间。</p>
         <p class="hint dim shortcuts">
-          快捷键：<kbd>Z</kbd> 缩放 · <kbd>A</kbd> 上一张 · <kbd>S</kbd> 下一张 · <kbd>D</kbd> 删除当前图片
+          快捷键：<kbd>A</kbd> 上一张 · <kbd>D</kbd> 下一张 · <kbd>W</kbd> 放大 · <kbd>S</kbd> 缩小 ·
+          <kbd>Q</kbd> 退出 · <kbd>G</kbd> 删除当前图片
         </p>
 
         <p v-if="error" class="banner error">{{ error }}</p>

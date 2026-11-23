@@ -2,6 +2,7 @@
 
 > 首次验证：2026-11-22；M1–M3 完成后复验：2026-11-22 晚。
 > 结论：环境可用，构建/测试/端到端流程均通过；唯一特殊处理是「工作区外缓存不可写」，已用项目内缓存目录解决。
+> 沙箱与权限的**通用**方案已提取到工作区根目录的 [SANDBOX.md](../SANDBOX.md)，新项目可直接参考；本文只保留 iphoto 特有的环境信息与验证记录。
 
 ## 1. 环境信息
 
@@ -19,29 +20,17 @@
 关键依赖：Go `modernc.org/sqlite v1.62.0`、`disintegration/imaging v1.6.2`、`rwcarlsen/goexif`；`go.mod` 要求 Go 1.26.0。
 前端 `vue 3.5.46`、`vue-router 5.5.1`、`vite 8.3.8`、`@vitejs/plugin-vue 6.0.11`、`typescript 6.0.3`、`vue-tsc 3.3.14`、`photoswipe 5.4.4`、`vue-virtual-scroller 3.0.5`。
 
-## 2. 权限边界（DSH 沙箱）
+## 2. 权限边界与缓存方案
 
-`workspace-write` 只允许写工作区。实测：
+`workspace-write` 沙箱的限制、缓存重定向的环境变量、可复制的 `scripts/env.sh` 模板、新项目接入清单与常见坑，统一维护在工作区根目录的 [SANDBOX.md](../SANDBOX.md)。新项目按那份文档接入即可，不必重复排查。
 
-- **可写**：`iphoto/` 内任意文件；`/tmp` 可写。
-- **被拒**：`~/go/pkg/mod`、`~/go/pkg/sumdb`、`~/Library/Caches/go-build`、`~/.npm`（`operation not permitted`）。
-- `ps` 被禁止执行（退出码 126），查进程/端口请用 `lsof -nP -iTCP:18765 -sTCP:LISTEN`。
-- Chrome 无法在沙箱内启动（`sandbox initialization failed`）。且按项目约定**不使用浏览器自动化测试**，UI 由用户在真实浏览器验收。
+iphoto 的具体落地：
 
-### 解决方案：缓存全部落到 `iphoto/.cache/`
-
-`scripts/env.sh` 重定向（已 gitignore）：
-
-| 变量 | 值 |
-|---|---|
-| `GOPATH` | `.cache/gopath` |
-| `GOMODCACHE` | `.cache/gopath/pkg/mod` |
-| `GOCACHE` | `.cache/go-build` |
-| `GOTMPDIR` | `.cache/tmp` |
-| `npm_config_cache` | `.cache/npm` |
-| `GOTELEMETRY` | `off` |
-
-**`GOSUMDB` 保持开启**，`go.sum` 校验不降级。缓存体积约 **1.0GB**，可 `make clean-cache` 清理后重建。
+- 缓存全部落在项目内 `iphoto/.cache/`（由 `scripts/env.sh` 重定向，已 gitignore）；`make` 内部会自动 source。
+- 实测被拒路径（`operation not permitted`）：`~/go/pkg/mod`、`~/go/pkg/sumdb`、`~/Library/Caches/go-build`、`~/.npm`；`/tmp` 可写。
+- `GOSUMDB` 保持开启，`go.sum` 校验不降级；缓存体积约 1.0GB，可 `make clean-cache` 清理后重建。
+- `ps` 被禁（退出码 126），查端口用 `lsof -nP -iTCP:18765 -sTCP:LISTEN`。
+- 沙箱内无法启动 Chrome，按项目约定不做浏览器自动化；UI 由用户在真实浏览器验收。
 
 ## 3. 验证记录
 
@@ -109,7 +98,7 @@ API 端到端（临时 `IPHOTO_BASE_DIR=/tmp/iphoto-e2e`，脚本化验证）：
 
 UI（时间线两行导航、标签页搜索+固定首项、自动加载、查看器新控件）按项目约定仍由用户在真实浏览器验收。
 
-2026-11-23 用户验收通过；随后按要求调整：缩放控件从左侧详情面板移到 PhotoSwipe 右上角工具栏（与自带缩放、关闭同排），并新增 `A` 上一张 / `S` 下一张 / `D` 删除快捷键（保留 `Z` 缩放）。`npm run typecheck`、`npm run build` 复验通过，细节仍由用户浏览器验收。
+2026-11-23 用户验收通过；随后按要求调整：缩放控件从左侧详情面板移到 PhotoSwipe 右上角工具栏（与自带缩放、关闭同排）。快捷键最终为 `A` 上一张 / `D` 下一张 / `W` 放大 / `S` 缩小 / `Q` 退出 / `G` 删除（Esc、方向键、`Z` 缩放等 PhotoSwipe 自带快捷键保留）。`npm run typecheck`、`npm run build` 复验通过，细节仍由用户浏览器验收。
 
 相似图片检测（本轮新增模块）：
 
@@ -171,8 +160,8 @@ IPHOTO_BASE_DIR=/tmp/iphoto-test ./bin/iphoto -no-browser
 ## 5. 注意事项
 
 1. **Node 版本**：nvm 默认别名仍是 `22`，项目通过 `.nvmrc` 固定 `26`。交互式终端请 `nvm use` 或执行一次 `nvm alias default 26`，否则 `make build` 会用 Node 22。
-2. **不要用 Chrome/无头浏览器做验证**：Chrome 在沙箱内无法启动，且 UI 验收由用户在真实浏览器完成。
-3. **`gofmt` 需限定目录**：`.cache/` 内的模块 testdata 会被误扫；使用 `make fmt`（已限定 `cmd internal web`）。
+2. **不要用 Chrome/无头浏览器做验证**：原因与替代方案见 [SANDBOX.md](../SANDBOX.md) 第 1、6 节；UI 验收由用户在真实浏览器完成。
+3. **`gofmt` 需限定目录**：`.cache/` 内的模块 testdata 会被误扫；使用 `make fmt`（已限定 `cmd internal web`），详见 [SANDBOX.md](../SANDBOX.md) 第 6 节。
 4. **Vite 显式绑定 IPv4**：`web/vite.config.ts` 设置 `host: '127.0.0.1'`，否则部分环境只监听 `::1`。
 5. **`web/dist` 不提交**：仓库只保留 `.gitkeep` 以保证 `go:embed` 可编译；未构建前端时页面返回「前端未构建」提示。
 6. **端口固定 18765**：被占用时启动失败并给出明确错误，不自动换端口。
