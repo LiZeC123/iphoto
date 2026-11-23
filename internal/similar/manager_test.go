@@ -20,16 +20,17 @@ func testPaths(base string) config.Paths {
 	library := filepath.Join(base, "library")
 	runtimeDir := filepath.Join(base, "runtime")
 	return config.Paths{
-		Base:    base,
-		Library: library,
-		Runtime: runtimeDir,
-		Blobs:   filepath.Join(library, "blobs"),
-		DB:      filepath.Join(library, "library.sqlite"),
-		Thumbs:  filepath.Join(runtimeDir, "thumbs"),
-		Trash:   filepath.Join(runtimeDir, "trash"),
-		Logs:    filepath.Join(runtimeDir, "logs"),
-		LogFile: filepath.Join(runtimeDir, "logs", "app.log"),
-		Exports: filepath.Join(runtimeDir, "exports"),
+		Base:     base,
+		Library:  library,
+		Runtime:  runtimeDir,
+		Blobs:    filepath.Join(library, "blobs"),
+		DB:       filepath.Join(library, "library.sqlite"),
+		Thumbs:   filepath.Join(runtimeDir, "thumbs"),
+		Previews: filepath.Join(runtimeDir, "previews"),
+		Trash:    filepath.Join(runtimeDir, "trash"),
+		Logs:     filepath.Join(runtimeDir, "logs"),
+		LogFile:  filepath.Join(runtimeDir, "logs", "app.log"),
+		Exports:  filepath.Join(runtimeDir, "exports"),
 	}
 }
 

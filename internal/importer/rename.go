@@ -52,7 +52,7 @@ func (m *Manager) Rename(ctx context.Context, hash, newName string) (store.Asset
 		return store.Asset{}, fmt.Errorf("%w: 不能修改扩展名（当前为 %s）", ErrInvalidName, currentExt)
 	}
 	if !media.IsSupported(name) {
-		return store.Asset{}, fmt.Errorf("%w: 只支持 jpg/jpeg/png", ErrInvalidName)
+		return store.Asset{}, fmt.Errorf("%w: 不支持的文件类型", ErrInvalidName)
 	}
 	name = sanitizeName(name, hash)
 	if !strings.EqualFold(filepath.Ext(name), currentExt) {

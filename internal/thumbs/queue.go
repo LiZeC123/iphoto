@@ -20,7 +20,10 @@ type Queue struct {
 
 	mu      sync.Mutex
 	pending map[string]struct{}
-	wg      sync.WaitGroup
+	// failed 记录本进程内已确认生成失败的哈希（如动图 WebP、损坏文件），
+	// 避免前端每次请求缩略图都重复解码。重启后仍会重试一次。
+	failed map[string]struct{}
+	wg     sync.WaitGroup
 }
 
 type job struct {
@@ -39,6 +42,7 @@ func New(paths config.Paths, log *slog.Logger, workers int) *Queue {
 		workers: workers,
 		ch:      make(chan job, 1024),
 		pending: make(map[string]struct{}),
+		failed:  make(map[string]struct{}),
 	}
 }
 
@@ -73,7 +77,10 @@ func (q *Queue) generate(j job) {
 	}
 	src := q.paths.BlobPath(j.relPath)
 	if err := media.GenerateThumbnail(src, dst); err != nil {
-		q.log.Warn("缩略图生成失败", "hash", j.hash, "err", err)
+		q.mu.Lock()
+		q.failed[j.hash] = struct{}{}
+		q.mu.Unlock()
+		q.log.Warn("缩略图生成失败，本次运行不再重试", "hash", j.hash, "err", err)
 	}
 }
 
@@ -83,6 +90,10 @@ func (q *Queue) Enqueue(hash, relPath string) {
 		return
 	}
 	q.mu.Lock()
+	if _, ok := q.failed[hash]; ok {
+		q.mu.Unlock()
+		return
+	}
 	if _, ok := q.pending[hash]; ok {
 		q.mu.Unlock()
 		return

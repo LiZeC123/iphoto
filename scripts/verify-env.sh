@@ -68,7 +68,7 @@ else
 fi
 
 step "目录初始化检查"
-for d in library library/blobs runtime runtime/thumbs runtime/trash runtime/logs runtime/exports; do
+for d in library library/blobs runtime runtime/thumbs runtime/previews runtime/trash runtime/logs runtime/exports; do
   if [ -d "$ROOT/$d" ]; then ok "存在 $d/"; else bad "缺失 $d/"; fi
 done
 if [ -f "$ROOT/library/library.sqlite" ]; then ok "存在 library/library.sqlite"; else bad "缺失 library/library.sqlite"; fi

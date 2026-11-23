@@ -10,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"iphoto/internal/config"
@@ -36,6 +37,8 @@ type Options struct {
 type handler struct {
 	opts Options
 	log  *slog.Logger
+	// previewMu 串行化预览图生成，避免同一张 TIFF 被并发解码。
+	previewMu sync.Mutex
 }
 
 // New 组装完整的 http.Handler。
@@ -60,6 +63,7 @@ func New(opts Options) http.Handler {
 	mux.HandleFunc("DELETE /api/assets/{hash}", h.deleteAsset)
 	mux.HandleFunc("GET /api/assets/{hash}/file", h.assetFile)
 	mux.HandleFunc("GET /api/assets/{hash}/thumb", h.assetThumb)
+	mux.HandleFunc("GET /api/assets/{hash}/preview", h.assetPreview)
 
 	mux.HandleFunc("GET /api/assets/{hash}/tags", h.assetTags)
 

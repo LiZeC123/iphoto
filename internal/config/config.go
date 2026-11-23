@@ -29,13 +29,14 @@ type Paths struct {
 	Library string // 需要备份
 	Runtime string // 可删除重建
 
-	Blobs   string // library/blobs
-	DB      string // library/library.sqlite
-	Thumbs  string // runtime/thumbs
-	Trash   string // runtime/trash
-	Logs    string // runtime/logs
-	LogFile string // runtime/logs/app.log
-	Exports string // runtime/exports
+	Blobs    string // library/blobs
+	DB       string // library/library.sqlite
+	Thumbs   string // runtime/thumbs
+	Previews string // runtime/previews（TIFF 等浏览器不可直显格式的 JPEG 预览）
+	Trash    string // runtime/trash
+	Logs     string // runtime/logs
+	LogFile  string // runtime/logs/app.log
+	Exports  string // runtime/exports
 }
 
 // Load 解析路径，但不创建目录。
@@ -49,16 +50,17 @@ func Load() (Paths, error) {
 	logs := filepath.Join(runtimeDir, "logs")
 
 	return Paths{
-		Base:    base,
-		Library: library,
-		Runtime: runtimeDir,
-		Blobs:   filepath.Join(library, "blobs"),
-		DB:      filepath.Join(library, "library.sqlite"),
-		Thumbs:  filepath.Join(runtimeDir, "thumbs"),
-		Trash:   filepath.Join(runtimeDir, "trash"),
-		Logs:    logs,
-		LogFile: filepath.Join(logs, "app.log"),
-		Exports: filepath.Join(runtimeDir, "exports"),
+		Base:     base,
+		Library:  library,
+		Runtime:  runtimeDir,
+		Blobs:    filepath.Join(library, "blobs"),
+		DB:       filepath.Join(library, "library.sqlite"),
+		Thumbs:   filepath.Join(runtimeDir, "thumbs"),
+		Previews: filepath.Join(runtimeDir, "previews"),
+		Trash:    filepath.Join(runtimeDir, "trash"),
+		Logs:     logs,
+		LogFile:  filepath.Join(logs, "app.log"),
+		Exports:  filepath.Join(runtimeDir, "exports"),
 	}, nil
 }
 
@@ -75,6 +77,14 @@ func (p Paths) ThumbPath(hash string) string {
 	return filepath.Join(p.Thumbs, hash[:2], hash[2:4], hash+".jpg")
 }
 
+// PreviewPath 由哈希得到查看器预览图路径：runtime/previews/ab/cd/<hash>.jpg。
+func (p Paths) PreviewPath(hash string) string {
+	if len(hash) < 4 {
+		return filepath.Join(p.Previews, hash+".jpg")
+	}
+	return filepath.Join(p.Previews, hash[:2], hash[2:4], hash+".jpg")
+}
+
 // Ensure 创建所有必需目录（幂等）。
 func (p Paths) Ensure() error {
 	dirs := []string{
@@ -82,6 +92,7 @@ func (p Paths) Ensure() error {
 		p.Blobs,
 		p.Runtime,
 		p.Thumbs,
+		p.Previews,
 		p.Trash,
 		p.Logs,
 		p.Exports,

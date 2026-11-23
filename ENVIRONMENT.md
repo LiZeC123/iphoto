@@ -130,6 +130,36 @@ UI（相似图片页的进度、结果分组、勾选删除）由用户在真实
 2026-11-22 首轮 M1 UI（图库 + 导入页）由用户在浏览器验收通过。
 此后新增的 M2/M3/M4 界面（查看器、时间线、标签页、相册页/详情、回收站、设置页、批量操作）以 `typecheck` + `vite build` + API 端到端为准，**等待用户浏览器验收**。
 
+### 3.5 新图片格式支持复验（2026-11-23，A 档）
+
+新增 GIF/WebP（静态）/BMP/TIFF 支持；动图 WebP 按约定暂不生成缩略图（仅记录在案）。
+
+```text
+golang.org/x/image      0.0.0-2019... → v0.48.0（BMP/TIFF/WebP 解码 + 元数据标记修复）
+gofmt -l cmd internal web   无输出
+go vet ./...                PASS
+go test ./...               PASS（新增 media 格式/缩略图/预览、扫描白名单、导入新格式等用例）
+npm run typecheck           PASS
+npm run build               PASS
+```
+
+API 端到端（临时 `IPHOTO_BASE_DIR=/tmp/iphoto-fmt-e2e`，脚本化验证：BMP/TIFF/静态 WebP/动图 GIF/动图 WebP + .txt）：
+
+| 场景 | 结果 |
+|---|---|
+| 扫描 | `total=5`，`unsupported` 只剩 `.txt` 1 个 |
+| 导入 | 5 个全部 `done`，MIME 分别为 image/bmp、image/tiff、image/webp、image/gif、image/webp，宽高均已写入 |
+| 缩略图 | BMP/TIFF/静态 WebP/动图 GIF 均 200 + `image/jpeg`；动图 WebP 返回 404（预期，前端显示「无缩略图」） |
+| 动图 WebP 原图 | `GET /file` 200 + `image/webp`（浏览器可播放） |
+| TIFF 预览 | `GET /preview` 200 + `image/jpeg`，缓存到 `runtime/previews/ab/cd/<hash>.jpg`；二次请求复用缓存 |
+| 非 TIFF 的 preview | 回落到原图（WebP 返回 `image/webp`） |
+| 动图 GIF | 缩略图取首帧，查看器保留动画（浏览器原生） |
+| 失败重试 | 缩略图生成失败后本进程内不再重复解码（`thumbs.Queue` 失败缓存） |
+
+二进制（`-s -w -trimpath`）由 11,869,794 字节（11.3MB）增至 12,004,706 字节（11.4MB），约 +0.13MB（仅 x/image 解码器，无 wasm、无 CGO）；TIFF 预览首次生成 ~0.1s（320×240 样本），不阻塞导入。
+
+UI（新格式网格缩略图、TIFF 查看器预览、动图 WebP「无缩略图」占位）由用户在真实浏览器验收。
+
 ## 4. 操作步骤
 
 ```bash

@@ -232,8 +232,8 @@ onBeforeUnmount(clearTimer)
       <TagSelector id="import-tags" v-model="importTags" placeholder="选择或输入标签，导入完成后统一添加" />
 
       <p class="hint dim">
-        支持 jpg/jpeg/png，递归所有子目录；跳过隐藏文件与符号链接。源文件只读，不移动、不改名、不删除。
-        标签只会添加到本次新导入的图片。
+        支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff，递归所有子目录；跳过隐藏文件与符号链接。源文件只读，不移动、不改名、不删除。
+        动图 WebP 可导入和查看，但暂时不会生成网格缩略图；标签只会添加到本次新导入的图片。
       </p>
     </section>
 

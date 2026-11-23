@@ -148,3 +148,22 @@ func TestScanUnsupportedFileListCapped(t *testing.T) {
 		t.Fatalf("ByExt = %+v", scan.Unsupported.ByExt)
 	}
 }
+
+func TestScanAcceptsNewImageFormats(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.gif", "b.webp", "c.bmp", "d.tif", "e.TIFF"} {
+		writeFile(t, filepath.Join(root, name), "x")
+	}
+	writeFile(t, filepath.Join(root, "still.txt"), "x")
+
+	scan, err := Scan(root)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if scan.Total != 5 {
+		t.Fatalf("Total = %d, want 5 (%v)", scan.Total, scan.Files)
+	}
+	if scan.Unsupported.Total != 1 || scan.Unsupported.ByExt[0].Ext != ".txt" {
+		t.Fatalf("Unsupported = %+v", scan.Unsupported)
+	}
+}

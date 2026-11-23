@@ -36,5 +36,7 @@ onBeforeUnmount(() => {
 
 <template>
   <img v-if="!failed" class="thumb-img" :src="url" :alt="alt ?? ''" loading="lazy" @error="onError" />
-  <div v-else class="thumb-placeholder">缩略图生成中…</div>
+  <div v-else class="thumb-placeholder" title="该图片暂时没有缩略图（例如动图 WebP 或文件损坏）">
+    暂无缩略图
+  </div>
 </template>

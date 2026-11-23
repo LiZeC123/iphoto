@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/gif"
 	"image/png"
 	"io"
 	"log/slog"
@@ -13,6 +14,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/image/bmp"
+	"golang.org/x/image/tiff"
 
 	"iphoto/internal/config"
 	"iphoto/internal/store"
@@ -175,16 +179,17 @@ func testPaths(base string) config.Paths {
 	library := filepath.Join(base, "library")
 	runtimeDir := filepath.Join(base, "runtime")
 	return config.Paths{
-		Base:    base,
-		Library: library,
-		Runtime: runtimeDir,
-		Blobs:   filepath.Join(library, "blobs"),
-		DB:      filepath.Join(library, "library.sqlite"),
-		Thumbs:  filepath.Join(runtimeDir, "thumbs"),
-		Trash:   filepath.Join(runtimeDir, "trash"),
-		Logs:    filepath.Join(runtimeDir, "logs"),
-		LogFile: filepath.Join(runtimeDir, "logs", "app.log"),
-		Exports: filepath.Join(runtimeDir, "exports"),
+		Base:     base,
+		Library:  library,
+		Runtime:  runtimeDir,
+		Blobs:    filepath.Join(library, "blobs"),
+		DB:       filepath.Join(library, "library.sqlite"),
+		Thumbs:   filepath.Join(runtimeDir, "thumbs"),
+		Previews: filepath.Join(runtimeDir, "previews"),
+		Trash:    filepath.Join(runtimeDir, "trash"),
+		Logs:     filepath.Join(runtimeDir, "logs"),
+		LogFile:  filepath.Join(runtimeDir, "logs", "app.log"),
+		Exports:  filepath.Join(runtimeDir, "exports"),
 	}
 }
 
@@ -387,5 +392,138 @@ func TestManagerRename(t *testing.T) {
 	// 同名重命名应为幂等操作。
 	if _, err := m.Rename(ctx, asset.Hash, "新名字.png"); err != nil {
 		t.Fatalf("同名重命名: %v", err)
+	}
+}
+
+func TestManagerImportsNewImageFormats(t *testing.T) {
+	base := t.TempDir()
+	paths := testPaths(base)
+	if err := paths.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	q := thumbs.New(paths, logger, 1)
+	qctx, cancelQueue := context.WithCancel(context.Background())
+	t.Cleanup(cancelQueue)
+	q.Start(qctx)
+	m := NewManager(st, paths, q, logger)
+	m.Workers = 1
+
+	src := filepath.Join(base, "src")
+	writeTestGIF(t, filepath.Join(src, "anim.gif"))
+	writeTestBMP(t, filepath.Join(src, "image.bmp"))
+	writeTestTIFF(t, filepath.Join(src, "scan.tif"))
+	webp, err := os.ReadFile(filepath.Join("..", "media", "testdata", "static.webp"))
+	if err != nil {
+		t.Fatalf("读取 WebP fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "saved.webp"), webp, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	batchID, err := m.Start(src, nil)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	snap := waitDone(t, m, batchID)
+	if snap.Status != "done" || snap.Imported != 4 || snap.Failed != 0 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+
+	ctx := context.Background()
+	page, err := st.ListAssets(ctx, store.AssetFilter{PageSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 4 {
+		t.Fatalf("assets = %d, want 4", page.Total)
+	}
+	wantMIME := map[string]string{
+		"anim.gif":   "image/gif",
+		"image.bmp":  "image/bmp",
+		"scan.tif":   "image/tiff",
+		"saved.webp": "image/webp",
+	}
+	for _, a := range page.Items {
+		want, ok := wantMIME[a.OriginalName]
+		if !ok {
+			t.Errorf("意外的文件: %s", a.OriginalName)
+			continue
+		}
+		if a.Mime != want {
+			t.Errorf("%s mime = %q, want %q", a.OriginalName, a.Mime, want)
+		}
+		if a.Width == nil || a.Height == nil {
+			t.Errorf("%s 缺少宽高", a.OriginalName)
+		}
+		if _, err := os.Stat(paths.BlobPath(a.RelPath)); err != nil {
+			t.Errorf("%s blob 缺失: %v", a.OriginalName, err)
+		}
+	}
+	for i := 0; i < 100; i++ {
+		if thumbCount(paths, page) == page.Total {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := thumbCount(paths, page); got != page.Total {
+		t.Fatalf("缩略图数量 = %d, want %d", got, page.Total)
+	}
+}
+
+func writeTestGIF(t *testing.T, path string) {
+	t.Helper()
+	palette := color.Palette{color.Black, color.White}
+	frames := []*image.Paletted{
+		image.NewPaletted(image.Rect(0, 0, 16, 12), palette),
+		image.NewPaletted(image.Rect(0, 0, 16, 12), palette),
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("创建目录: %v", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := gif.EncodeAll(f, &gif.GIF{Image: frames, Delay: []int{10, 10}}); err != nil {
+		t.Fatalf("编码 GIF: %v", err)
+	}
+}
+
+func writeTestBMP(t *testing.T, path string) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 16, 12))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("创建目录: %v", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := bmp.Encode(f, img); err != nil {
+		t.Fatalf("编码 BMP: %v", err)
+	}
+}
+
+func writeTestTIFF(t *testing.T, path string) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 20, 10))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("创建目录: %v", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := tiff.Encode(f, img, &tiff.Options{Compression: tiff.Deflate}); err != nil {
+		t.Fatalf("编码 TIFF: %v", err)
 	}
 }

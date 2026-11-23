@@ -49,7 +49,8 @@ type ScanResult struct {
 	Unsupported Unsupported `json:"unsupported"`
 }
 
-// Scan 递归遍历 root，只收集 jpg/jpeg/png；跳过隐藏文件与符号链接。
+// Scan 递归遍历 root，只收集白名单内的图片格式（jpg/jpeg/png/gif/webp/bmp/tif/tiff）；
+// 跳过隐藏文件与符号链接。
 // 因扩展名不受支持而被跳过的文件会统计在 Unsupported 中（数量、后缀分布、最多 100 个文件）。
 func Scan(root string) (ScanResult, error) {
 	abs, err := filepath.Abs(root)

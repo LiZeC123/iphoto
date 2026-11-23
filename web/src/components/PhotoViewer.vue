@@ -98,10 +98,10 @@ function openViewer(index = props.startIndex): void {
   if (!props.assets.length) return
 
   const dataSource: SlideData[] = props.assets.map((asset) => ({
-    src: assetsApi.fileUrl(asset.hash),
+    // TIFF 浏览器无法直接显示，改读服务端生成的 JPEG 预览；其它格式仍读原图。
+    src: asset.mime === 'image/tiff' ? assetsApi.previewUrl(asset.hash) : assetsApi.fileUrl(asset.hash),
     msrc: assetsApi.thumbUrl(asset.hash),
-    width: asset.width ?? 1600,
-    height: asset.height ?? 1200,
+    ...slideSize(asset),
     alt: asset.original_name,
   }))
 
@@ -168,6 +168,23 @@ function openViewer(index = props.startIndex): void {
     if (pswp === instance) pswp = null
   })
   instance.init()
+}
+
+// 预览图的后端长边上限（与 internal/media.PreviewLongEdge 保持一致）。
+const PREVIEW_LONG_EDGE = 2560
+
+// TIFF 的 slide 尺寸按预览图计算，避免「1:1」把 2560px 的预览放大到原始尺寸导致糊成一片。
+function slideSize(asset: Asset): { width: number; height: number } {
+  let width = asset.width ?? 1600
+  let height = asset.height ?? 1200
+  if (asset.mime === 'image/tiff') {
+    const scale = Math.min(1, PREVIEW_LONG_EDGE / Math.max(width, height))
+    if (scale < 1) {
+      width = Math.max(1, Math.round(width * scale))
+      height = Math.max(1, Math.round(height * scale))
+    }
+  }
+  return { width, height }
 }
 
 function destroy(): void {

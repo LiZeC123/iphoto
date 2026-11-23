@@ -10,9 +10,15 @@ import (
 	"strings"
 	"time"
 
-	// 注册 jpeg / png 解码器（MVP 只承诺 JPG/JPEG/PNG）。
+	// 注册解码器：GIF 用标准库，BMP/TIFF/WebP 用 golang.org/x/image。
+	// WebP 只支持静态图（动图 WebP 可导入、浏览器可播放，但暂不生成缩略图）。
+	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/tiff"
+	_ "golang.org/x/image/webp"
 
 	"github.com/rwcarlsen/goexif/exif"
 )
@@ -88,15 +94,24 @@ func mimeOf(format string) string {
 		return "image/jpeg"
 	case "png":
 		return "image/png"
+	case "gif":
+		return "image/gif"
+	case "webp":
+		return "image/webp"
+	case "bmp":
+		return "image/bmp"
+	case "tiff":
+		return "image/tiff"
 	default:
 		return "application/octet-stream"
 	}
 }
 
-// IsSupported 按扩展名白名单判断是否可导入（MVP 承诺 jpg/jpeg/png）。
+// IsSupported 按扩展名白名单判断是否可导入。
+// 当前支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff；AVIF、HEIC、视频仍走「不支持」报告。
 func IsSupported(p string) bool {
 	switch strings.ToLower(filepath.Ext(p)) {
-	case ".jpg", ".jpeg", ".png":
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff":
 		return true
 	default:
 		return false
@@ -110,7 +125,26 @@ func MIMEOf(p string) string {
 		return "image/jpeg"
 	case ".png":
 		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".bmp":
+		return "image/bmp"
+	case ".tif", ".tiff":
+		return "image/tiff"
 	default:
 		return "application/octet-stream"
+	}
+}
+
+// NeedsDisplayProxy 判断该 MIME 是否需要服务端转成 JPEG 才能在浏览器中查看。
+// TIFF 不被 Chrome/Firefox 支持，查看器改用 /api/assets/{hash}/preview 生成的 JPEG 预览。
+func NeedsDisplayProxy(mime string) bool {
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "image/tiff":
+		return true
+	default:
+		return false
 	}
 }

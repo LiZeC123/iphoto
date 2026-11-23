@@ -43,4 +43,6 @@ export const assetsApi = {
   timeline: () => api.get<{ months: MonthCount[] }>('/timeline/months'),
   thumbUrl: (hash: string) => `/api/assets/${hash}/thumb`,
   fileUrl: (hash: string) => `/api/assets/${hash}/file`,
+  // TIFF 等浏览器无法直显的格式：服务端生成 JPEG 预览。
+  previewUrl: (hash: string) => `/api/assets/${hash}/preview`,
 }
