@@ -22,6 +22,7 @@ import (
 	"iphoto/internal/importer"
 	"iphoto/internal/logging"
 	"iphoto/internal/maintenance"
+	"iphoto/internal/media"
 	"iphoto/internal/similar"
 	"iphoto/internal/store"
 	"iphoto/internal/thumbs"
@@ -58,6 +59,9 @@ func run(noBrowser bool) error {
 	slog.SetDefault(logger)
 
 	logger.Info("iphoto 启动", "version", version, "base", paths.Base, "library", paths.Library, "runtime", paths.Runtime)
+	if !media.FFmpegAvailable() {
+		logger.Warn("未检测到 ffmpeg，视频缩略图将不可用（MP4 仍可导入与播放）")
+	}
 
 	st, err := store.Open(paths.DB)
 	if err != nil {

@@ -40,7 +40,7 @@ const pickerAnchor = ref<number | null>(null)
 const isSmart = computed(() => album.value?.type === 'smart')
 const subtitle = computed(() =>
   album.value
-    ? `${isSmart.value ? '智能相册' : '普通相册'} · ${total.value} 张`
+    ? `${isSmart.value ? '智能相册' : '普通相册'} · ${total.value} 个文件`
     : '加载中…',
 )
 const loadedAll = computed(() => items.value.length >= total.value)
@@ -122,7 +122,7 @@ function exitSelection(): void {
 
 async function removeSelected(): Promise<void> {
   if (!selectedCount.value) return
-  if (!window.confirm(`从相册移除选中的 ${selectedCount.value} 张图片？`)) return
+  if (!window.confirm(`从相册移除选中的 ${selectedCount.value} 个文件？`)) return
   try {
     const res = await albumsApi.removeItems(albumId.value, [...selected.value])
     notice.value = `已移除 ${res.removed} 张`
@@ -266,7 +266,7 @@ onMounted(() => {
     >
       <template #empty>
         <div class="empty">
-          <strong>相册还没有图片</strong>
+          <strong>相册还没有文件</strong>
           <p v-if="isSmart">调整规则，或等图库中出现符合条件的图片。</p>
           <p v-else>点击「添加图片」从图库挑选。</p>
         </div>
@@ -301,7 +301,7 @@ onMounted(() => {
       <div v-if="pickerOpen" class="modal-backdrop" @click.self="pickerOpen = false">
         <div class="modal">
           <div class="panel-head">
-            <h2>从图库添加（已选 {{ pickerSelected.size }} 张）</h2>
+            <h2>从图库添加（已选 {{ pickerSelected.size }} 个文件）</h2>
             <button class="btn btn-sm" @click="pickerOpen = false">关闭</button>
           </div>
           <p v-if="pickerLoading" class="dim">加载中…</p>
@@ -313,7 +313,7 @@ onMounted(() => {
             @pick="onPickerPick"
           >
             <template #empty>
-              <div class="empty">图库还没有图片</div>
+              <div class="empty">图库还没有文件</div>
             </template>
           </AssetGrid>
           <div class="toolbar modal-actions">

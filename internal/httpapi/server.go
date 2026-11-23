@@ -15,6 +15,7 @@ import (
 
 	"iphoto/internal/config"
 	"iphoto/internal/importer"
+	"iphoto/internal/media"
 	"iphoto/internal/similar"
 	"iphoto/internal/store"
 	"iphoto/internal/thumbs"
@@ -144,6 +145,7 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 		"runtime":        h.opts.Paths.Runtime,
 		"port":           config.Port,
 		"active_import":  active,
+		"ffmpeg":         media.FFmpegAvailable(),
 	})
 }
 

@@ -3,6 +3,7 @@ package thumbs
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"sync"
@@ -23,7 +24,9 @@ type Queue struct {
 	// failed 记录本进程内已确认生成失败的哈希（如动图 WebP、损坏文件），
 	// 避免前端每次请求缩略图都重复解码。重启后仍会重试一次。
 	failed map[string]struct{}
-	wg     sync.WaitGroup
+	// ffmpegOnce 保证「未安装 ffmpeg」只提示一次，而不是每张视频一条日志。
+	ffmpegOnce sync.Once
+	wg         sync.WaitGroup
 }
 
 type job struct {
@@ -76,12 +79,26 @@ func (q *Queue) generate(j job) {
 		return
 	}
 	src := q.paths.BlobPath(j.relPath)
-	if err := media.GenerateThumbnail(src, dst); err != nil {
-		q.mu.Lock()
-		q.failed[j.hash] = struct{}{}
-		q.mu.Unlock()
-		q.log.Warn("缩略图生成失败，本次运行不再重试", "hash", j.hash, "err", err)
+	var err error
+	if media.IsVideo(j.relPath) {
+		err = media.GenerateVideoThumbnail(src, dst)
+	} else {
+		err = media.GenerateThumbnail(src, dst)
 	}
+	if err == nil {
+		return
+	}
+
+	q.mu.Lock()
+	q.failed[j.hash] = struct{}{}
+	q.mu.Unlock()
+	if errors.Is(err, media.ErrFFmpegNotFound) {
+		q.ffmpegOnce.Do(func() {
+			q.log.Warn("未检测到 ffmpeg，视频缩略图将不可用（视频仍可播放）")
+		})
+		return
+	}
+	q.log.Warn("缩略图生成失败，本次运行不再重试", "hash", j.hash, "err", err)
 }
 
 // Enqueue 非阻塞入队；已存在缩略图或已在队列中则忽略。

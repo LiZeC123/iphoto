@@ -22,7 +22,7 @@ const filteredTags = computed(() => {
   return tags.value.filter((tag) => tag.name.toLowerCase().includes(q))
 })
 const subtitle = computed(
-  () => `共 ${tags.value.length} 个标签 · ${untaggedCount.value} 张图片未标记`,
+  () => `共 ${tags.value.length} 个标签 · ${untaggedCount.value} 个文件未标记`,
 )
 
 async function load(): Promise<void> {
@@ -127,7 +127,7 @@ onMounted(load)
     </table>
 
     <p v-if="!loading && !tags.length" class="dim empty-tip">
-      还没有标签。可以在图库中选择图片后批量打标签（标签选择器支持直接输入新标签名）。
+      还没有标签。可以在图库中选择文件后批量打标签（标签选择器支持直接输入新标签名）。
     </p>
     <p v-else-if="!loading && keyword && !filteredTags.length" class="dim empty-tip">
       没有匹配「{{ keyword }}」的标签。

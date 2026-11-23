@@ -6,6 +6,7 @@ import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import type { Asset } from '@/api/types'
 import AssetThumb from '@/components/AssetThumb.vue'
 import { formatDate } from '@/utils/format'
+import { isVideoAsset } from '@/utils/media'
 
 const props = withDefaults(
   defineProps<{
@@ -215,7 +216,12 @@ const rows = computed<Row[]>(() => {
             <span v-if="selectable" class="select-dot" :class="{ on: selected.has(cell.asset.hash) }">
               {{ selected.has(cell.asset.hash) ? '✓' : '' }}
             </span>
-            <AssetThumb :hash="cell.asset.hash" :alt="cell.asset.original_name" />
+            <span v-if="isVideoAsset(cell.asset)" class="video-badge" aria-hidden="true">▶</span>
+            <AssetThumb
+              :hash="cell.asset.hash"
+              :alt="cell.asset.original_name"
+              :mime="cell.asset.mime"
+            />
             <span class="asset-meta">
               <strong :title="cell.asset.original_name">{{ cell.asset.original_name }}</strong>
               <span>{{ formatDate(cell.asset.taken_at) }}</span>
@@ -300,6 +306,24 @@ const rows = computed<Row[]>(() => {
 .select-dot.on {
   border-color: var(--accent);
   background: var(--accent);
+}
+
+.video-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  min-width: 24px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(20, 22, 26, 0.78);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  pointer-events: none;
 }
 
 .asset-meta {

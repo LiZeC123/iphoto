@@ -10,6 +10,7 @@ import { tagsApi } from '@/api/tags'
 import type { Asset } from '@/api/types'
 import TagSelector from '@/components/TagSelector.vue'
 import { formatBytes, formatDate } from '@/utils/format'
+import { isVideoAsset } from '@/utils/media'
 
 const props = defineProps<{ assets: Asset[]; startIndex: number; open: boolean }>()
 const emit = defineEmits<{
@@ -39,6 +40,12 @@ let pswp: PhotoSwipe | null = null
 let suppressClose = false
 
 const current = computed<Asset | null>(() => props.assets[currentIndex.value] ?? null)
+const isCurrentVideo = computed(() => isVideoAsset(current.value))
+const dimensions = computed(() => {
+  const asset = current.value
+  if (!asset || asset.width == null || asset.height == null) return '—'
+  return `${asset.width}×${asset.height}`
+})
 
 // 只在切换图片（哈希变化）时重置表单；保存/重命名后父组件替换同一条记录不应清空提示。
 watch(
@@ -94,16 +101,27 @@ watch(
 )
 
 function openViewer(index = props.startIndex): void {
+  pauseAllVideos()
   destroy()
   if (!props.assets.length) return
 
-  const dataSource: SlideData[] = props.assets.map((asset) => ({
-    // TIFF 浏览器无法直接显示，改读服务端生成的 JPEG 预览；其它格式仍读原图。
-    src: asset.mime === 'image/tiff' ? assetsApi.previewUrl(asset.hash) : assetsApi.fileUrl(asset.hash),
-    msrc: assetsApi.thumbUrl(asset.hash),
-    ...slideSize(asset),
-    alt: asset.original_name,
-  }))
+  const dataSource: SlideData[] = props.assets.map((asset) => {
+    if (isVideoAsset(asset)) {
+      // MP4 直接交给原生 <video> 播放；/file 已支持 Range，可拖动进度。
+      return {
+        html: videoSlideHTML(asset),
+        ...slideSize(asset),
+        alt: asset.original_name,
+      }
+    }
+    return {
+      // TIFF 浏览器无法直接显示，改读服务端生成的 JPEG 预览；其它格式仍读原图。
+      src: asset.mime === 'image/tiff' ? assetsApi.previewUrl(asset.hash) : assetsApi.fileUrl(asset.hash),
+      msrc: assetsApi.thumbUrl(asset.hash),
+      ...slideSize(asset),
+      alt: asset.original_name,
+    }
+  })
 
   currentIndex.value = Math.min(Math.max(index, 0), props.assets.length - 1)
   const instance = new PhotoSwipe({
@@ -159,22 +177,34 @@ function openViewer(index = props.startIndex): void {
   pswp = instance
   // 旧实例的动画回调可能在重新打开之后才触发，所有回调都要校验实例身份。
   instance.on('change', () => {
-    if (pswp === instance) currentIndex.value = instance.currIndex
+    if (pswp !== instance) return
+    pauseAllVideos()
+    currentIndex.value = instance.currIndex
+    syncVideoMode()
   })
   instance.on('close', () => {
+    pauseAllVideos()
     if (!suppressClose) emit('close')
   })
   instance.on('destroy', () => {
     if (pswp === instance) pswp = null
   })
   instance.init()
+  syncVideoMode()
 }
 
 // 预览图的后端长边上限（与 internal/media.PreviewLongEdge 保持一致）。
 const PREVIEW_LONG_EDGE = 2560
 
-// TIFF 的 slide 尺寸按预览图计算，避免「1:1」把 2560px 的预览放大到原始尺寸导致糊成一片。
+// 视频的 slide 尺寸按视口计算，交给 <video> 的 object-fit: contain 适配横竖屏，
+// 避免使用固定 16:9 盒子时竖屏视频被压得很小。
 function slideSize(asset: Asset): { width: number; height: number } {
+  if (isVideoAsset(asset)) {
+    return {
+      width: Math.max(320, Math.round(window.innerWidth)),
+      height: Math.max(240, Math.round(window.innerHeight)),
+    }
+  }
   let width = asset.width ?? 1600
   let height = asset.height ?? 1200
   if (asset.mime === 'image/tiff') {
@@ -187,7 +217,62 @@ function slideSize(asset: Asset): { width: number; height: number } {
   return { width, height }
 }
 
+// 视频 slide 的 HTML：hash 是十六进制，URL 由它拼成，无需转义。
+function videoSlideHTML(asset: Asset): string {
+  const src = assetsApi.fileUrl(asset.hash)
+  const poster = assetsApi.thumbUrl(asset.hash)
+  return (
+    '<video class="iphoto-video" controls playsinline preload="metadata"' +
+    ` src="${src}" poster="${poster}"></video>`
+  )
+}
+
+// 当前正在播放的 video 元素；切换/关闭时显式暂停，避免移出 DOM 后继续出声。
+let activeVideo: HTMLVideoElement | null = null
+
+function pauseActiveVideo(): void {
+  if (activeVideo) {
+    activeVideo.pause()
+    activeVideo = null
+  }
+}
+
+function captureActiveVideo(): void {
+  activeVideo = (pswp?.element?.querySelector('video.iphoto-video') as HTMLVideoElement | null) ?? null
+}
+
+// 关闭/切换时同时暂停已捕获和仍在 DOM 中的视频，避免残留播放。
+function pauseAllVideos(): void {
+  pauseActiveVideo()
+  pswp?.element?.querySelectorAll('video').forEach((el) => {
+    try {
+      ;(el as HTMLVideoElement).pause()
+    } catch {
+      // 忽略已销毁的元素
+    }
+  })
+}
+
+// 视频 slide 下关闭垂直拖拽关闭与方向键翻页，避免和原生控件冲突；同时隐藏缩放按钮。
+function syncVideoMode(): void {
+  if (!pswp) return
+  const video = isCurrentVideo.value
+  pswp.element?.classList.toggle('iphoto-video-mode', video)
+  pswp.options.closeOnVerticalDrag = !video
+  pswp.options.arrowKeys = !video
+  if (video) {
+    captureActiveVideo()
+    // 首次打开时 content 可能还没挂到 DOM，稍后再捕获一次。
+    window.setTimeout(() => {
+      if (pswp && isCurrentVideo.value) captureActiveVideo()
+    }, 150)
+  } else {
+    pauseActiveVideo()
+  }
+}
+
 function destroy(): void {
+  pauseAllVideos()
   if (!pswp) return
   const instance = pswp
   pswp = null
@@ -203,6 +288,7 @@ function destroy(): void {
 // ---- 缩放 ----
 
 function zoomBy(ratio: number): void {
+  if (isCurrentVideo.value) return
   const slide = pswp?.currSlide
   if (!slide) return
   const levels = slide.zoomLevels
@@ -212,6 +298,7 @@ function zoomBy(ratio: number): void {
 }
 
 function zoomActual(): void {
+  if (isCurrentVideo.value) return
   const slide = pswp?.currSlide
   if (!slide) return
   const target = Math.min(1, slide.zoomLevels.max)
@@ -310,6 +397,8 @@ function onKeydown(event: KeyboardEvent): void {
   if (event.defaultPrevented || event.isComposing) return
   if (event.metaKey || event.ctrlKey || event.altKey) return
   if (isTypingTarget(event.target)) return
+  // 视频控件获得焦点时把按键（空格、方向键等）交给原生控件。
+  if ((event.target as HTMLElement | null)?.closest('video')) return
   switch (event.key.toLowerCase()) {
     case 'a':
       event.preventDefault()
@@ -373,15 +462,17 @@ onBeforeUnmount(destroy)
   <Teleport to="body">
     <div v-if="open" class="viewer-panel" :class="{ collapsed: !panelOpen }">
       <button class="panel-toggle btn btn-sm" type="button" @click="panelOpen = !panelOpen">
-        {{ panelOpen ? '收起信息' : '图片信息' }}
+        {{ panelOpen ? '收起信息' : '文件信息' }}
       </button>
 
       <div v-if="panelOpen && current" class="panel-body">
         <h3 :title="current.original_name">{{ current.original_name }}</h3>
 
         <dl class="kv">
+          <dt>类型</dt>
+          <dd>{{ isCurrentVideo ? '视频' : '图片' }}</dd>
           <dt>尺寸</dt>
-          <dd>{{ current.width ?? '?' }}×{{ current.height ?? '?' }}</dd>
+          <dd>{{ dimensions }}</dd>
           <dt>大小</dt>
           <dd>{{ formatBytes(current.size) }}</dd>
           <dt>时间</dt>
@@ -428,7 +519,7 @@ onBeforeUnmount(destroy)
             v-model="note"
             rows="3"
             class="input"
-            placeholder="为这张图片写点描述"
+            placeholder="为这个文件写点描述"
             @keydown.stop
           />
         </label>
@@ -437,7 +528,10 @@ onBeforeUnmount(destroy)
           <input v-model="override" type="datetime-local" step="1" class="input" @keydown.stop />
         </label>
         <p class="hint dim">留空则使用自动解析时间。</p>
-        <p class="hint dim shortcuts">
+        <p v-if="isCurrentVideo" class="hint dim">
+          视频直接在本页播放（可拖动进度）。若浏览器不支持该编码，可用「在文件浏览器中显示」交给系统播放器。
+        </p>
+        <p v-else class="hint dim shortcuts">
           快捷键：<kbd>A</kbd> 上一张 · <kbd>D</kbd> 下一张 · <kbd>W</kbd> 放大 · <kbd>S</kbd> 缩小 ·
           <kbd>Q</kbd> 退出 · <kbd>G</kbd> 删除当前图片
         </p>

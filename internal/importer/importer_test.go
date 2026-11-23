@@ -19,6 +19,7 @@ import (
 	"golang.org/x/image/tiff"
 
 	"iphoto/internal/config"
+	"iphoto/internal/media"
 	"iphoto/internal/store"
 	"iphoto/internal/thumbs"
 )
@@ -526,4 +527,75 @@ func writeTestTIFF(t *testing.T, path string) {
 	if err := tiff.Encode(f, img, &tiff.Options{Compression: tiff.Deflate}); err != nil {
 		t.Fatalf("编码 TIFF: %v", err)
 	}
+}
+
+func TestManagerImportsVideo(t *testing.T) {
+	base := t.TempDir()
+	paths := testPaths(base)
+	if err := paths.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(paths.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	q := thumbs.New(paths, logger, 1)
+	qctx, cancelQueue := context.WithCancel(context.Background())
+	t.Cleanup(cancelQueue)
+	q.Start(qctx)
+	m := NewManager(st, paths, q, logger)
+	m.Workers = 1
+
+	src := filepath.Join(base, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "media", "testdata", "sample.mp4"))
+	if err != nil {
+		t.Fatalf("读取 MP4 fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "clip.mp4"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	batchID, err := m.Start(src, nil)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	snap := waitDone(t, m, batchID)
+	if snap.Status != "done" || snap.Imported != 1 || snap.Failed != 0 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+
+	page, err := st.ListAssets(context.Background(), store.AssetFilter{PageSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("assets = %d, want 1", page.Total)
+	}
+	asset := page.Items[0]
+	if asset.Mime != "video/mp4" {
+		t.Fatalf("mime = %q, want video/mp4", asset.Mime)
+	}
+	if asset.Width != nil || asset.Height != nil {
+		t.Fatalf("视频宽高应存 NULL，got %v x %v", asset.Width, asset.Height)
+	}
+	if _, err := os.Stat(paths.BlobPath(asset.RelPath)); err != nil {
+		t.Fatalf("视频 blob 缺失: %v", err)
+	}
+
+	if !media.FFmpegAvailable() {
+		t.Log("未安装 ffmpeg，跳过视频缩略图断言")
+		return
+	}
+	for i := 0; i < 150; i++ {
+		if _, err := os.Stat(paths.ThumbPath(asset.Hash)); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("视频缩略图未生成")
 }

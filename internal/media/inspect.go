@@ -34,7 +34,12 @@ type Info struct {
 }
 
 // Inspect 读取尺寸、MIME、EXIF 方向与拍摄时间；EXIF 缺失不视为错误。
+// 视频不解码，只返回 MIME（宽高留空，由前端/查看器按视口自适应）。
 func Inspect(p string) (Info, error) {
+	if IsVideo(p) {
+		return Info{MIME: MIMEOf(p), Rotation: 1}, nil
+	}
+
 	var info Info
 	f, err := os.Open(p)
 	if err != nil {
@@ -108,10 +113,11 @@ func mimeOf(format string) string {
 }
 
 // IsSupported 按扩展名白名单判断是否可导入。
-// 当前支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff；AVIF、HEIC、视频仍走「不支持」报告。
+// 当前支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff 与 mp4（视频只存原文件）；
+// AVIF、HEIC 及其它视频容器仍走「不支持」报告。
 func IsSupported(p string) bool {
 	switch strings.ToLower(filepath.Ext(p)) {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff":
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".mp4":
 		return true
 	default:
 		return false
@@ -133,6 +139,8 @@ func MIMEOf(p string) string {
 		return "image/bmp"
 	case ".tif", ".tiff":
 		return "image/tiff"
+	case ".mp4":
+		return "video/mp4"
 	default:
 		return "application/octet-stream"
 	}

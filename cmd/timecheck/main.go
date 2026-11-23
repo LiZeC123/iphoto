@@ -2,7 +2,7 @@
 //
 // 用法：
 //
-//	iphoto-timecheck [-db library/library.sqlite] [-json] <图片目录>
+//	iphoto-timecheck [-db library/library.sqlite] [-json] <目录>
 //
 // 它使用与导入完全相同的扫描过滤与时间解析逻辑（EXIF → 文件名规则 → 文件修改时间 → 导入时间），
 // 从 library.sqlite 读取启用的规则；数据库不存在时回退到内置规则，便于在首次导入前预检。
@@ -52,7 +52,7 @@ func main() {
 	dbPath := flag.String("db", "library/library.sqlite", "SQLite 库路径（读取启用的时间解析规则）")
 	asJSON := flag.Bool("json", false, "以 JSON 输出")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "用法: iphoto-timecheck [-db library/library.sqlite] [-json] <图片目录>\n\n")
+		fmt.Fprintf(os.Stderr, "用法: iphoto-timecheck [-db library/library.sqlite] [-json] <目录>\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -130,9 +130,9 @@ func main() {
 		fmt.Printf("%s%-19s %-24s %s\n", flagText, item.TakenAt, item.Source, item.Name)
 	}
 
-	fmt.Printf("\n共 %d 张图片", out.Total)
+	fmt.Printf("\n共 %d 个文件", out.Total)
 	if fallbacks > 0 {
-		fmt.Printf("，其中 %d 张将回退到导入时间（建议补充时间解析规则）：\n", fallbacks)
+		fmt.Printf("，其中 %d 个文件将回退到导入时间（建议补充时间解析规则）：\n", fallbacks)
 		for _, item := range items {
 			if item.Fallback {
 				fmt.Printf("  - %s\n", item.Path)

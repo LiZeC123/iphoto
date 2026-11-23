@@ -15,6 +15,7 @@
 | npm | 11.20.0 |
 | pnpm | 未安装（统一使用 npm） |
 | git | 2.50.1 |
+| ffmpeg（可选） | 9.0.1（Homebrew，含 libx264/libdav1d/libx265）；仅用于 MP4 缩略图抽帧 |
 | 端口 | 后端 `18765`、Vite 开发 `5173` |
 
 关键依赖：Go `modernc.org/sqlite v1.62.0`、`disintegration/imaging v1.6.2`、`rwcarlsen/goexif`；`go.mod` 要求 Go 1.26.0。
@@ -125,12 +126,7 @@ npm run build               PASS
 
 UI（相似图片页的进度、结果分组、勾选删除）由用户在真实浏览器验收。
 
-### 3.4 浏览器验收
-
-2026-11-22 首轮 M1 UI（图库 + 导入页）由用户在浏览器验收通过。
-此后新增的 M2/M3/M4 界面（查看器、时间线、标签页、相册页/详情、回收站、设置页、批量操作）以 `typecheck` + `vite build` + API 端到端为准，**等待用户浏览器验收**。
-
-### 3.5 新图片格式支持复验（2026-11-23，A 档）
+### 3.4 新图片格式支持复验（2026-11-23，A 档）
 
 新增 GIF/WebP（静态）/BMP/TIFF 支持；动图 WebP 按约定暂不生成缩略图（仅记录在案）。
 
@@ -159,6 +155,38 @@ API 端到端（临时 `IPHOTO_BASE_DIR=/tmp/iphoto-fmt-e2e`，脚本化验证�
 二进制（`-s -w -trimpath`）由 11,869,794 字节（11.3MB）增至 12,004,706 字节（11.4MB），约 +0.13MB（仅 x/image 解码器，无 wasm、无 CGO）；TIFF 预览首次生成 ~0.1s（320×240 样本），不阻塞导入。
 
 UI（新格式网格缩略图、TIFF 查看器预览、动图 WebP「无缩略图」占位）由用户在真实浏览器验收。
+
+### 3.5 视频（MP4）支持复验（2026-11-23）
+
+```text
+gofmt -l cmd internal web   无输出
+go vet ./...                PASS
+go test ./...               PASS（新增 MP4 Inspect/抽帧、视频导入、0×0 尺寸归一化、相似检测排除视频等用例；共 66 个测试函数）
+npm run typecheck           PASS
+npm run build               PASS
+make build                  PASS（内嵌前端）
+```
+
+API 端到端（临时 `IPHOTO_BASE_DIR`，脚本化验证；样本含 2 张 JPG、1 个 H.264/AAC MP4、1 个 MKV）：
+
+| 场景 | 结果 |
+|---|---|
+| 扫描 | `total=3`（2 图片 + mp4）；`.mkv` 仍计入 `unsupported`（1 个） |
+| 导入 | 3 个全部 `done`、0 failed；mp4 的 MIME=`video/mp4`，`width/height=NULL` |
+| 原视频 / Range | `GET /file` 200 + `video/mp4` + `Accept-Ranges: bytes`；`Range: bytes=0-99` → 206 + 100 字节 |
+| 视频缩略图 | ffmpeg 可用时 200 + JPEG；`/preview` 对视频回落原文件 |
+| 相似检测 | `total=2`、`failures=0`（视频被 `mime NOT LIKE 'video/%'` 排除） |
+| 无 ffmpeg | 通过 `PATH=/usr/bin:/bin` 启动：`/api/health.ffmpeg=false`；导入/播放正常，缩略图 404（前端显示「▶ 视频」占位） |
+| 端到端截图 | 略（UI 由用户在真实浏览器验收） |
+
+二进制（`-s -w -trimpath`）由 12,004,706 字节增至 12,021,442 字节，约 **+0.016MB**（纯 Go 侧只加了视频分支与 ffmpeg 调用，无新依赖）。
+
+UI（网格 ▶ 角标、视频 slide 原生播放、切换暂停、无 ffmpeg 占位、设置页 ffmpeg 状态）由用户在真实浏览器验收。
+
+### 3.6 浏览器验收
+
+2026-11-22 首轮 M1 UI（图库 + 导入页）由用户在浏览器验收通过。
+此后新增的 M2/M3/M4 界面（查看器、时间线、标签页、相册页/详情、回收站、设置页、批量操作）以 `typecheck` + `vite build` + API 端到端为准，**等待用户浏览器验收**。
 
 ## 4. 操作步骤
 

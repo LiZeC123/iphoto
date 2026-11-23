@@ -25,7 +25,7 @@
 - 人脸识别、OCR、语义搜索、以图搜图。
 - 相似图检测（感知哈希）；只做完全重复（SHA-256 相同）。
 - 评分、收藏、颜色标记。
-- 视频、RAW、HEIC、AVIF 等格式；当前支持 JPG/JPEG/PNG/GIF/WebP(静态)/BMP/TIF/TIFF，AVIF、HEIC、视频仍走「不支持」报告。
+- RAW、HEIC、AVIF、MKV/AVI 等格式；当前支持 JPG/JPEG/PNG/GIF/WebP(静态)/BMP/TIF/TIFF 与 MP4（视频只存原文件，可在查看器播放），其它格式仍走「不支持」报告。
 - 图片编辑（裁剪、旋转、滤镜）。
 - 自动清理回收站；回收站由用户手动清空。
 - 系统托盘、Windows 服务、开机自启。
@@ -302,7 +302,7 @@ CREATE TABLE asset_signatures (
 ### 5.2 递归扫描
 
 - 递归遍历源目录**所有子目录**，不限制层级。
-- 过滤支持的扩展名：`.jpg .jpeg .png .gif .webp .bmp .tif .tiff`（大小写不敏感；WebP 仅静态图有缩略图）。
+- 过滤支持的扩展名：`.jpg .jpeg .png .gif .webp .bmp .tif .tiff .mp4`（大小写不敏感；WebP 仅静态图有缩略图；MP4 只存原文件）。
 - 跳过隐藏文件、系统文件、符号链接（避免循环）。
 - 扫描结果先去重（同一路径只处理一次），再进入导入。
 - **不支持的文件必须显式报告**：统计总数、按后缀（含「无后缀」）计数，并列出最多 100 个相对路径；扫描接口与导入进度/批次统计都返回该信息，CSV 报告也会追加 `unsupported` 行，避免文件被静默忽略。
@@ -351,6 +351,7 @@ CREATE TABLE asset_signatures (
 - EXIF Orientation 在缩略图阶段转正，不改原图。
 - 大图查看读 `library/blobs` 原图；TIFF 浏览器无法直接渲染，查看器改读 `runtime/previews/ab/cd/<hash>.jpg`（长边 2560、质量 85，首次请求时生成并缓存）。
 - 预览图同样是可删除重建的派生数据，不参与备份。
+- MP4 视频：不在导入时转码，原文件进 CAS；缩略图由 `ffmpeg` 从 **已入库的 blob** 抽一帧（0.5s 处，失败回退第一帧）生成 384px JPEG。ffmpeg 是可选依赖：未安装时视频仍可导入/播放，网格显示「▶ 视频」占位。
 - TIFF 由 `golang.org/x/image/tiff` 解码；个别压缩方式（如 JPEG-in-TIFF）暂不支持，这类文件仍可导入，但缩略图/预览会失败（网格显示「暂无缩略图」）。
 
 ---
@@ -477,7 +478,7 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
 | POST | `/api/assets/batch/delete` | 批量软删除 |
 | POST | `/api/assets/batch/albums` | 批量加入普通相册 |
 | POST | `/api/assets/batch/export` | 批量导出，body: `{hashes:[], target_dir, by_album?}` |
-| GET | `/api/assets/{hash}/file` | 返回原图（支持 Range） |
+| GET | `/api/assets/{hash}/file` | 返回原文件（图片或 MP4，支持 Range；`/preview` 用于 TIFF 等浏览器不可直显格式） |
 | GET | `/api/assets/{hash}/thumb` | 返回缩略图 |
 | GET | `/api/assets/{hash}/preview` | 返回查看器用 JPEG 预览（TIFF 等浏览器不可直显格式；其它格式回落原图），首次请求时生成并缓存 |
 
@@ -570,7 +571,7 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
    - 列表首项固定为「未标记任何标签」，点击跳到图库的 `untagged=1` 筛选，便于排查漏标图片。
 6. **导入页**
    - 路径输入框（记住上次）、扫描预览（含递归统计与不支持文件明细）、开始导入、进度条、重复对比列表、报告导出。
-   - 提示当前支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff，以及「动图 WebP 暂无缩略图」的限制。
+   - 提示当前支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff 与 mp4，以及「动图 WebP 暂无缩略图」「mp4 缩略图需要 ffmpeg」的限制。
 7. **回收站页**
    - 列表、恢复、清空。
 8. **设置页**
@@ -591,6 +592,7 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
    - 支持重命名（同步数据库与库内文件，扩展名不可修改）、在系统文件浏览器中显示所在目录。
    - 删除后自动切到下一张；已是最后一张时退出查看器。
    - TIFF 等浏览器无法直显的格式：`GET /api/assets/{hash}/preview` 返回服务端生成的 JPEG 预览图。
+   - MP4 视频：slide 使用 `<video controls playsinline>`（PhotoSwipe 的 html 内容），沿用 `/file` 的 Range 拖动；切换/关闭时暂停；视频模式下隐藏缩放按钮并关闭垂直拖拽/方向键翻页，避免与原生控件冲突。
 
 ### 12.2 状态管理
 
@@ -724,7 +726,7 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
 
 ## 18. 开发时确认的细节（不阻塞开工）
 
-- 已支持 GIF/WebP(静态)/BMP/TIFF；动图 WebP 因 `x/image/webp` 不支持动图解码，暂不生成缩略图（查看器仍可播放）。AVIF/HEIC/视频待后续阶段。
+- 已支持 GIF/WebP(静态)/BMP/TIFF 与 MP4 视频；动图 WebP 因 `x/image/webp` 不支持动图解码，暂不生成缩略图（查看器仍可播放）。AVIF/HEIC 待后续阶段；MKV/AVI 等其它视频容器暂不支持。
 - 普通相册封面：第一版自动取第一张，手动设置放 P1。
 - 标签合并：P1。
 - 导出任务进度：P1 可同步等待，P2 再做后台任务。
@@ -766,6 +768,29 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
 - 按组展示缩略图、文件名、拍摄时间与「与上一张 Δ距离」。
 - 点击缩略图用现有查看器打开该组原图；每张图可勾选，默认全部保留。
 - 「删除所选」调用现有批量删除接口移入回收站（可恢复）；删除后本地移除对应图片，剩余不足 2 张的组不再展示。
+
+---
+
+## 20. 视频（MVP：MP4）
+
+### 20.1 范围
+
+- 只支持 `.mp4`：原文件原样进入 CAS，不转码、不改变哈希/大小，导出、回收站、恢复、完整性校验与图片完全一致。
+- 网格：优先用 ffmpeg 从入库后的 blob 抽一帧（0.5s 处，极短视频回退第一帧）生成 384px JPEG 缩略图；未安装 ffmpeg 时显示「▶ 视频」占位，不影响播放。
+- 查看器：用 PhotoSwipe 的 html 内容渲染 `<video controls playsinline preload="metadata">`，`/api/assets/{hash}/file` 已支持 Range，可拖动进度。视频模式下隐藏缩放按钮、关闭垂直拖拽与方向键翻页；切换/关闭时暂停播放。
+- 详情侧栏：类型显示「视频」，宽高留空（`NULL`），显示「—」；其它字段（标签、备注、时间覆盖、重命名、在文件浏览器中显示、删除）与图片一致。
+- 不参与相似图片检测：`ListDetectionAssets` 明确排除 `mime LIKE 'video/%'`，避免解码失败打断相似链。
+
+### 20.2 依赖与降级
+
+- `ffmpeg` 为可选外部依赖（`PATH` 中查找）。未安装时：导入/播放正常，缩略图不可用；启动日志与 `/api/health` 的 `ffmpeg` 字段、设置页「运行信息」会提示。
+- 浏览器能否播放取决于编码：H.264/AAC 的 MP4 兼容性最好；HEVC 等取决于平台/浏览器。页面会提示可用「在文件浏览器中显示」交给系统播放器。
+- MKV/AVI 等容器暂不支持（仍出现在「不支持文件」报告里）；后续如需支持，优先考虑 MKV `-c copy` remux 到 MP4 或明确降级，而不是全量转码。
+
+### 20.3 后续可选增强
+
+- ffprobe 读取时长/宽高/旋转并写入 `assets`（需 schema 迁移）。
+- 视频类型筛选、时长展示、客户端截帧作为无 ffmpeg 时的海报兜底。
 
 ---
 

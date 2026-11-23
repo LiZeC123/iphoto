@@ -15,9 +15,9 @@ import (
 
 func TestIsSupportedAndMIME(t *testing.T) {
 	supported := []string{
-		"a.jpg", "a.JPEG", "a.png", "a.gif", "a.webp", "a.bmp", "a.tif", "a.TIFF",
+		"a.jpg", "a.JPEG", "a.png", "a.gif", "a.webp", "a.bmp", "a.tif", "a.TIFF", "clip.mp4", "clip.MP4",
 	}
-	unsupported := []string{"a.avif", "a.heic", "a.mp4", "a.txt", "a"}
+	unsupported := []string{"a.avif", "a.heic", "a.mkv", "a.mov", "a.txt", "a"}
 	for _, name := range supported {
 		if !IsSupported(name) {
 			t.Errorf("IsSupported(%q) = false, want true", name)
@@ -35,7 +35,7 @@ func TestIsSupportedAndMIME(t *testing.T) {
 	mimes := map[string]string{
 		"a.jpg": "image/jpeg", "a.jpeg": "image/jpeg", "a.png": "image/png",
 		"a.gif": "image/gif", "a.webp": "image/webp", "a.bmp": "image/bmp",
-		"a.tif": "image/tiff", "a.tiff": "image/tiff",
+		"a.tif": "image/tiff", "a.tiff": "image/tiff", "a.mp4": "video/mp4",
 	}
 	for name, want := range mimes {
 		if got := MIMEOf(name); got != want {
@@ -48,6 +48,41 @@ func TestIsSupportedAndMIME(t *testing.T) {
 	}
 	if NeedsDisplayProxy("image/webp") || NeedsDisplayProxy("image/gif") {
 		t.Error("浏览器可直显的格式不应走预览代理")
+	}
+	if !IsVideo("clip.MP4") || IsVideo("clip.mkv") || IsVideo("clip.jpg") {
+		t.Error("IsVideo 只应识别 mp4")
+	}
+}
+
+func TestInspectVideo(t *testing.T) {
+	path := filepath.Join("testdata", "sample.mp4")
+	info, err := Inspect(path)
+	if err != nil {
+		t.Fatalf("Inspect(%s): %v", path, err)
+	}
+	if info.MIME != "video/mp4" {
+		t.Fatalf("MIME = %q, want video/mp4", info.MIME)
+	}
+	if info.Width != 0 || info.Height != 0 {
+		t.Fatalf("视频宽高应为 0（存 NULL），got %dx%d", info.Width, info.Height)
+	}
+}
+
+func TestGenerateVideoThumbnail(t *testing.T) {
+	if !FFmpegAvailable() {
+		t.Skip("未安装 ffmpeg，跳过视频抽帧测试")
+	}
+	src := filepath.Join("testdata", "sample.mp4")
+	dst := filepath.Join(t.TempDir(), "video-thumb.jpg")
+	if err := GenerateVideoThumbnail(src, dst); err != nil {
+		t.Fatalf("GenerateVideoThumbnail: %v", err)
+	}
+	cfg, err := jpeg.DecodeConfig(mustOpen(t, dst))
+	if err != nil {
+		t.Fatalf("解码视频缩略图: %v", err)
+	}
+	if cfg.Width != 384 {
+		t.Fatalf("缩略图宽度 = %d, want 384", cfg.Width)
 	}
 }
 

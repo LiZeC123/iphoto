@@ -178,9 +178,13 @@ onMounted(async () => {
         <dt>监听</dt><dd>127.0.0.1:{{ health.port }}</dd>
         <dt>library</dt><dd class="mono">{{ health.library }}</dd>
         <dt>runtime</dt><dd class="mono">{{ health.runtime }}</dd>
+        <dt>ffmpeg</dt>
+        <dd>
+          {{ health.ffmpeg ? '可用（视频缩略图）' : '未安装（视频缩略图不可用，MP4 仍可播放）' }}
+        </dd>
       </dl>
       <p class="hint dim">
-        备份：停止服务后整体复制 library/ 即可；runtime/（缩略图、回收站、日志、导出）不需要备份。端口与路径写死，不可在运行时修改。
+        备份：停止服务后整体复制 library/ 即可；runtime/（缩略图、预览图、回收站、日志、导出）不需要备份。端口与路径写死，不可在运行时修改。
       </p>
     </section>
 

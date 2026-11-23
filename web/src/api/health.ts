@@ -8,6 +8,7 @@ export interface Health {
   library: string
   runtime: string
   port: number
+  ffmpeg: boolean
 }
 
 export const fetchHealth = () => api.get<Health>('/health')

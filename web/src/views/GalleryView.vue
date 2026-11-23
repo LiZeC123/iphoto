@@ -69,9 +69,9 @@ const untaggedOnly = computed(() => route.query.untagged === '1')
 const loadedAll = computed(() => items.value.length >= total.value)
 const selectedCount = computed(() => selected.value.size)
 const subtitle = computed(() => {
-  if (untaggedOnly.value) return `未标记标签 共 ${total.value} 张`
-  if (activeTag.value) return `标签「${activeTag.value}」共 ${total.value} 张`
-  return `共 ${total.value} 张图片`
+  if (untaggedOnly.value) return `未标记标签 共 ${total.value} 个文件`
+  if (activeTag.value) return `标签「${activeTag.value}」共 ${total.value} 个文件`
+  return `共 ${total.value} 个文件`
 })
 
 async function load(reset: boolean): Promise<void> {
@@ -194,7 +194,7 @@ async function batchAddTags(): Promise<void> {
   batchBusy.value = true
   try {
     await tagsApi.batch([...selected.value], names)
-    notice.value = `已为 ${selectedCount.value} 张图片添加标签：${names.join('、')}`
+    notice.value = `已为 ${selectedCount.value} 个文件添加标签：${names.join('、')}`
     batchTags.value = []
     await refreshSelectedTags()
   } catch (err) {
@@ -210,7 +210,7 @@ async function removeTagFromSelection(tag: Tag): Promise<void> {
   error.value = ''
   try {
     await tagsApi.batch([...selected.value], [], [tag.name])
-    notice.value = `已从 ${selectedCount.value} 张图片移除标签：${tag.name}`
+    notice.value = `已从 ${selectedCount.value} 个文件移除标签：${tag.name}`
     selectedTags.value = selectedTags.value.filter((item) => item.id !== tag.id)
     if (activeTag.value === tag.name) {
       exitSelection()
@@ -345,7 +345,7 @@ onMounted(() => {
       >
         <template #empty>
           <div class="empty">
-            <strong>没有符合条件的图片</strong>
+            <strong>没有符合条件的文件</strong>
             <p>换个筛选条件，或先到「导入」页导入照片。</p>
             <RouterLink to="/import" class="btn btn-primary">去导入</RouterLink>
           </div>

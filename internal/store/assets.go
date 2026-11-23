@@ -110,7 +110,14 @@ func (s *Store) InsertImportingAsset(ctx context.Context, a Asset) error {
 }
 
 // MarkAssetReady 在复制与探测完成后补齐字段并置为 ready。
+// 视频等无法/无需解码的格式宽高为 0，统一存 NULL，避免前端显示 0×0。
 func (s *Store) MarkAssetReady(ctx context.Context, hash string, size int64, mime string, width, height *int, takenAt, takenAtSource string) error {
+	if width != nil && *width <= 0 {
+		width = nil
+	}
+	if height != nil && *height <= 0 {
+		height = nil
+	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE assets SET size = ?, mime = ?, width = ?, height = ?,
 			taken_at = ?, taken_at_source = ?, status = 'ready'
@@ -301,6 +308,8 @@ func (s *Store) ListAssets(ctx context.Context, f AssetFilter) (AssetPage, error
 func (s *Store) ListDetectionAssets(ctx context.Context, from string) ([]Asset, error) {
 	where := []string{
 		"a.status = 'ready'",
+		// 相似检测只针对图片；视频无法计算 dHash，必须排除，否则会打断相似链。
+		"a.mime NOT LIKE 'video/%'",
 		effectiveTimeExpr + " IS NOT NULL",
 		"length(" + effectiveTimeExpr + ") >= 10",
 	}

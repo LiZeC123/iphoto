@@ -79,7 +79,7 @@ async function restore(hashes: string[]): Promise<void> {
 
 async function emptyTrash(): Promise<void> {
   if (!total.value) return
-  if (!window.confirm(`清空回收站将永久删除 ${total.value} 张图片（无法恢复），确认继续？`)) return
+  if (!window.confirm(`清空回收站将永久删除 ${total.value} 个文件（无法恢复），确认继续？`)) return
   busy.value = true
   error.value = ''
   try {
@@ -110,7 +110,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageShell title="回收站" :subtitle="`共 ${total} 张已删除图片`">
+  <PageShell title="回收站" :subtitle="`共 ${total} 个已删除文件`">
     <div class="toolbar filter-bar">
       <button class="btn" :disabled="busy || !selectedCount" @click="restore([...selected])">
         {{ busy ? '处理中…' : `恢复所选（${selectedCount}）` }}

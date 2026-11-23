@@ -60,9 +60,9 @@ const activeYear = computed(() => years.value.find((node) => node.year === selec
 const filter = computed(() => selectedMonth.value || selectedYear.value)
 const loadedAll = computed(() => items.value.length >= total.value)
 const subtitle = computed(() => {
-  if (selectedMonth.value) return `${selectedMonth.value} 共 ${total.value} 张`
-  if (selectedYear.value) return `${selectedYear.value} 年 共 ${total.value} 张`
-  return `共 ${total.value} 张图片`
+  if (selectedMonth.value) return `${selectedMonth.value} 共 ${total.value} 个文件`
+  if (selectedYear.value) return `${selectedYear.value} 年 共 ${total.value} 个文件`
+  return `共 ${total.value} 个文件`
 })
 
 async function loadMonths(): Promise<void> {
@@ -194,7 +194,7 @@ onMounted(async () => {
       <AssetGrid :items="items" @open="openViewer" @load-more="loadMore">
         <template #empty>
           <div class="empty">
-            <strong>没有可展示的图片</strong>
+            <strong>没有可展示的文件</strong>
             <p v-if="months.length">换一个年月试试，或先导入图片。</p>
             <p v-else>照片导入后，会按拍摄年月自动聚合到这里。</p>
           </div>
@@ -206,7 +206,7 @@ onMounted(async () => {
         <span v-else-if="items.length && !loadedAll" class="dim">
           继续向下滚动自动加载（已显示 {{ items.length }}/{{ total }}）
         </span>
-        <span v-else-if="items.length" class="dim">已加载全部 {{ total }} 张</span>
+        <span v-else-if="items.length" class="dim">已加载全部 {{ total }} 个文件</span>
       </div>
 
       <PhotoViewer

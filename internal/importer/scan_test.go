@@ -84,7 +84,7 @@ func TestScanReportsUnsupported(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "a.jpg"), "a")
 	writeFile(t, filepath.Join(root, "notes.txt"), "n")
-	writeFile(t, filepath.Join(root, "sub", "clip.mp4"), "m")
+	writeFile(t, filepath.Join(root, "sub", "clip.mkv"), "m")
 	writeFile(t, filepath.Join(root, "sub", "noext"), "x")
 	// 隐藏文件按约定跳过，不计入「类型不支持」。
 	writeFile(t, filepath.Join(root, ".hidden.txt"), "h")
@@ -106,7 +106,7 @@ func TestScanReportsUnsupported(t *testing.T) {
 	for _, e := range scan.Unsupported.ByExt {
 		gotByExt[e.Ext] = e.Count
 	}
-	wantByExt := map[string]int{".txt": 1, ".mp4": 1, "(无后缀)": 1}
+	wantByExt := map[string]int{".txt": 1, ".mkv": 1, "(无后缀)": 1}
 	if len(gotByExt) != len(wantByExt) {
 		t.Fatalf("ByExt = %+v", gotByExt)
 	}
@@ -115,7 +115,7 @@ func TestScanReportsUnsupported(t *testing.T) {
 			t.Errorf("ByExt[%q] = %d, want %d", ext, gotByExt[ext], want)
 		}
 	}
-	wantFiles := map[string]bool{"notes.txt": true, "sub/clip.mp4": true, "sub/noext": true}
+	wantFiles := map[string]bool{"notes.txt": true, "sub/clip.mkv": true, "sub/noext": true}
 	if len(scan.Unsupported.Files) != len(wantFiles) {
 		t.Fatalf("Files = %v", scan.Unsupported.Files)
 	}
@@ -151,7 +151,7 @@ func TestScanUnsupportedFileListCapped(t *testing.T) {
 
 func TestScanAcceptsNewImageFormats(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"a.gif", "b.webp", "c.bmp", "d.tif", "e.TIFF"} {
+	for _, name := range []string{"a.gif", "b.webp", "c.bmp", "d.tif", "e.TIFF", "v.mp4"} {
 		writeFile(t, filepath.Join(root, name), "x")
 	}
 	writeFile(t, filepath.Join(root, "still.txt"), "x")
@@ -160,8 +160,8 @@ func TestScanAcceptsNewImageFormats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	if scan.Total != 5 {
-		t.Fatalf("Total = %d, want 5 (%v)", scan.Total, scan.Files)
+	if scan.Total != 6 {
+		t.Fatalf("Total = %d, want 6 (%v)", scan.Total, scan.Files)
 	}
 	if scan.Unsupported.Total != 1 || scan.Unsupported.ByExt[0].Ext != ".txt" {
 		t.Fatalf("Unsupported = %+v", scan.Unsupported)
