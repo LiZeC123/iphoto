@@ -34,15 +34,16 @@ var version = "0.1.0-dev"
 
 func main() {
 	noBrowser := flag.Bool("no-browser", false, "启动后不自动打开浏览器")
+	noLocal := flag.Bool("no-local", false, "监听所有地址")
 	flag.Parse()
 
-	if err := run(*noBrowser); err != nil {
+	if err := run(*noBrowser, *noLocal); err != nil {
 		fmt.Fprintf(os.Stderr, "iphoto 启动失败: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(noBrowser bool) error {
+func run(noBrowser, noLocal bool) error {
 	paths, err := config.Load()
 	if err != nil {
 		return err
@@ -102,7 +103,12 @@ func run(noBrowser bool) error {
 		Shutdown: requestShutdown,
 	})
 
-	addr := net.JoinHostPort(config.BindAddr, strconv.Itoa(config.Port))
+	bindAddr := config.BindAddr
+	if noLocal {
+		bindAddr = "0.0.0.0"
+	}
+
+	addr := net.JoinHostPort(bindAddr, strconv.Itoa(config.Port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("监听 %s 失败（端口固定为 %d，请先释放该端口）: %w", addr, config.Port, err)
