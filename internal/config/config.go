@@ -34,6 +34,7 @@ type Paths struct {
 	Thumbs   string // runtime/thumbs
 	Previews string // runtime/previews（TIFF 等浏览器不可直显格式的 JPEG 预览）
 	Trash    string // runtime/trash
+	Temp     string // runtime/tmp（手机导入等临时文件，启动时清理）
 	Logs     string // runtime/logs
 	LogFile  string // runtime/logs/app.log
 	Exports  string // runtime/exports
@@ -58,6 +59,7 @@ func Load() (Paths, error) {
 		Thumbs:   filepath.Join(runtimeDir, "thumbs"),
 		Previews: filepath.Join(runtimeDir, "previews"),
 		Trash:    filepath.Join(runtimeDir, "trash"),
+		Temp:     filepath.Join(runtimeDir, "tmp"),
 		Logs:     logs,
 		LogFile:  filepath.Join(logs, "app.log"),
 		Exports:  filepath.Join(runtimeDir, "exports"),
@@ -94,6 +96,7 @@ func (p Paths) Ensure() error {
 		p.Thumbs,
 		p.Previews,
 		p.Trash,
+		p.Temp,
 		p.Logs,
 		p.Exports,
 	}

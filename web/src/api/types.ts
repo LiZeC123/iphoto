@@ -61,6 +61,17 @@ export interface ImportProgress {
   current?: string
   started_at: string
   finished_at?: string
+  /** local（本地目录）或 phone（手机同步）。 */
+  source?: 'local' | 'phone'
+  device_id?: number
+  device_name?: string
+  /** 手机同步阶段：listing / downloading。 */
+  phase?: string
+  bytes_total?: number
+  bytes_done?: number
+  unchanged?: number
+  /** 本轮手机媒体库水位（GENERATION_MODIFIED）。 */
+  checkpoint?: number
 }
 
 export interface DuplicateItem {
@@ -113,6 +124,56 @@ export interface ImportBatch {
   finished_at: string | null
   status: string
   item_count: number
+  source?: 'local' | 'phone'
+  device_id?: number
+}
+
+/** 已登记的手机设备（不含 Token）。 */
+export interface PhoneDevice {
+  id: number
+  name: string
+  model: string
+  manufacturer: string
+  android_version: string
+  address: string
+  has_token: boolean
+  created_at: string
+  last_seen_at: string
+  last_sync_at: string | null
+  last_checkpoint: number
+  last_status: string | null
+  last_batch_id: number | null
+  /** 同步账本按状态统计：synced / failed / unsupported / missing。 */
+  counts: Record<string, number>
+}
+
+export interface PhoneKindStat {
+  total: number
+  pending: number
+}
+
+/** 检查连接的结果。 */
+export interface PhoneProbe {
+  address: string
+  device: {
+    name: string
+    model: string
+    manufacturer: string
+    android_version: string
+    battery_level: number
+    charging: boolean
+    ip: string
+    port: number
+  }
+  known: boolean
+  device_id?: number
+  /** 设备已登记但地址与上次不同（可能换了那台手机）。 */
+  address_changed: boolean
+  last_sync_at: string | null
+  last_checkpoint: number
+  version: number
+  images: PhoneKindStat
+  videos: PhoneKindStat
 }
 
 export interface VerifyIssue {

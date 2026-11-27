@@ -188,6 +188,41 @@ UI（网格 ▶ 角标、视频 slide 原生播放、切换暂停、无 ffmpeg �
 2026-11-22 首轮 M1 UI（图库 + 导入页）由用户在浏览器验收通过。
 此后新增的 M2/M3/M4 界面（查看器、时间线、标签页、相册页/详情、回收站、设置页、批量操作）以 `typecheck` + `vite build` + API 端到端为准，**等待用户浏览器验收**。
 
+### 3.7 手机导入（PhoneDock）复验（2026-11-27）
+
+真机：`Xiaomi 22101317C / Android 13`，PhoneDock v1 监听 `http://192.168.1.215:8765`，Token `2179`。相册实测 **109 张图片（285,169,796 B）+ 6 个视频（216,806,019 B）**，合计约 502 MB；扩展名全部在白名单内（jpg 94 / png 11 / jpeg 1 / webp 1 / gif 2 / mp4 6）。
+
+```text
+gofmt -l cmd internal web   无输出
+go vet ./...                PASS
+go test ./...               PASS（新增 phonedock 客户端、store 设备/账本与 v2→v3 迁移、
+                             importer 手机同步等用例：首轮全量、增量免下载、账本命中、
+                             自动跳过重复内容、类型不支持、3001/传输中断与失败重试、
+                             取消不推进 checkpoint、probe 不写库、换地址续接同一设备）
+npm run typecheck           PASS
+npm run build               PASS
+```
+
+真实设备小规模验收（临时 `IPHOTO_BASE_DIR=/tmp/iphoto-phone-test2`，
+`IPHOTO_PHONE_ITEM_LIMIT=1` → 图片与视频**各**只拉 1 项，且不推进进度）：
+
+| 场景 | 结果 |
+|---|---|
+| `POST /api/phone/probe` | 设备信息正确；`known=false`、`images{total:109,pending:109}`、`videos{total:6,pending:6}`、`version:442415`；未写库 |
+| 首轮同步（1 图 + 1 视频） | `status=done`、`imported=2`、`bytes_total=bytes_done=43,353,265`；图片 `image/jpeg 4000×3000` + `exif:DateTimeOriginal`；视频 `video/mp4 37,940,488 B`、宽高用手机元数据兜底为 `1920×1080`、时间用 `dateAdded` |
+| 缩略图 | 2 张（图片 384px + ffmpeg 抽帧的视频缩略图） |
+| 账本 / 设备 | `counts.synced=2`；`last_checkpoint=0`（limit 生效不推进，符合预期） |
+| 导入明细 / CSV | `source_path=phone://Xiaomi 22101317C/<kind>/<id>/<name>`，状态 `new` |
+| 第二轮（空 Token） | 复用已存 Token；`unchanged=2`、`imported=0`，无任何下载 |
+| 标签 | 同步后标签「手机」自动挂到 2 个新资产 |
+| 临时文件 | 同步结束后 `runtime/tmp/` 为空 |
+| Token 错误 | 502 +「Token 不正确：请核对手机 PhoneDock 上的 Token…」 |
+| 地址不可达 | 502 +「无法连接手机 http://192.168.1.250:8765：请确认…」 |
+| 地址带路径 | 400 +「手机地址只需填主机与端口，不要带路径」 |
+| `DELETE /api/phone/devices/{id}` | 删除设备与账本成功，库内图片保留 |
+
+完整 502 MB 全量同步（109 图 + 6 视频，验证 checkpoint 推进与大文件续传）待用户确认后再跑。
+
 ## 4. 操作步骤
 
 ```bash
@@ -225,3 +260,5 @@ IPHOTO_BASE_DIR=/tmp/iphoto-test ./bin/iphoto -no-browser
 6. **端口固定 18765**：被占用时启动失败并给出明确错误，不自动换端口。
 7. **`IPHOTO_BASE_DIR` 仅用于开发**：正式运行时 `library/`、`runtime/` 位于可执行文件目录旁（dev.md 2.1）。
 8. **启动修复策略**：`status='importing'` 的记录若文件大小正确则补全为 `ready`，否则删除半成品文件与记录（`assets.status` 无 `failed` 取值）。
+9. **后台进程要受管启动**：用 shell `&` 拉起的 iphoto 进程访问局域网会被拒（`dial tcp ...: connect: no route to host`），但同一 shell 里的 `curl` 正常。验收时请用受管后台任务启动服务，或在前台运行。
+10. **手机导入的临时上限**：`IPHOTO_PHONE_ITEM_LIMIT=N` 让图片与视频各只处理前 N 项且**不推进 checkpoint**，仅用于开发/验收；正常使用不要设置。

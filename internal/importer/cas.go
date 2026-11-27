@@ -143,3 +143,37 @@ func CopyBlob(blobsRoot, relPath, srcPath string) (int64, error) {
 	}
 	return n, nil
 }
+
+// AdoptFile 把一个已经下载/生成好的临时文件移动到 CAS 目标位置，返回落盘字节数。
+//
+// 与 CopyBlob 的区别：内容已经在磁盘上，优先用 rename 避免 60MB 视频写两遍；
+// 跨文件系统（EXDEV）或 rename 失败时退回复制。调用前须用 PlanTarget 规划路径。
+func AdoptFile(blobsRoot, relPath, tmpPath string, expected int64) (int64, error) {
+	stat, err := os.Stat(tmpPath)
+	if err != nil {
+		return 0, fmt.Errorf("读取临时文件: %w", err)
+	}
+	if stat.Size() != expected {
+		return 0, fmt.Errorf("临时文件大小不一致：期望 %d 字节，实际 %d 字节", expected, stat.Size())
+	}
+
+	target := filepath.Join(blobsRoot, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return 0, fmt.Errorf("创建 CAS 目录: %w", err)
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		// 跨盘 rename 会失败，退回「复制 + 删除临时文件」。
+		written, copyErr := CopyBlob(blobsRoot, relPath, tmpPath)
+		if copyErr != nil {
+			return 0, copyErr
+		}
+		if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			return written, nil
+		}
+		return written, nil
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		return 0, err
+	}
+	return stat.Size(), nil
+}

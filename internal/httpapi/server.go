@@ -101,6 +101,11 @@ func New(opts Options) http.Handler {
 	mux.HandleFunc("DELETE /api/time-rules/{id}", h.deleteTimeRule)
 	mux.HandleFunc("POST /api/time-rules/test", h.testTimeRule)
 
+	mux.HandleFunc("GET /api/phone/devices", h.listPhoneDevices)
+	mux.HandleFunc("POST /api/phone/probe", h.probePhone)
+	mux.HandleFunc("POST /api/phone/sync", h.syncPhone)
+	mux.HandleFunc("DELETE /api/phone/devices/{id}", h.forgetPhoneDevice)
+
 	mux.HandleFunc("POST /api/import/scan", h.scanImport)
 	mux.HandleFunc("POST /api/import/start", h.startImport)
 	mux.HandleFunc("GET /api/import/active", h.activeImport)

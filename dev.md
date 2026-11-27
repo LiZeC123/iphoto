@@ -794,4 +794,133 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
 
 ---
 
+## 21. 手机导入（PhoneDock）
+
+### 21.1 目标与边界
+
+手机端由独立项目 PhoneDock 提供能力（见 `../PhoneDock/README.md`）：设备信息、相册元数据（全量/增量）、原文件、缩略图、按需 SHA-256。iphoto 只作为调用方，**通过 HTTP 接口交互，不关心其实现**。
+
+- 目标：在导入页填手机地址 + 4 位 Token，把手机相册增量拉进 `library/`；新设备从头读，老设备按上次进度续接。
+- 手机侧**只读**：不修改、不删除手机内容；手机删图不会删 iphoto 的图（不做双向同步）。
+- 不做：定时自动同步、断点续传（PhoneDock v1 不支持 Range）、手机端删除对账、HEIC/MOV 等新格式（仍按「类型不支持」显式报告）。
+- 下载**串行**：PhoneDock 的原文件接口有传输锁（同一时刻只允许一个全文件读取），并发只会互相等待。
+
+### 21.2 设备识别
+
+- 身份：`device_key = lower(manufacturer) + "|" + lower(model)`，展示名 `manufacturer + " " + model`（如 `Xiaomi 22101317C`）。
+- 不用地址做身份：手机 IP 会变（DHCP），按地址识别会让每次同步都变成「新设备全量」。
+- 代价：两台同型号手机会命中同一条记录。检查连接时若地址与上次不同会提示，用户可勾选「全量重扫」（按 generation 重新列出，账本命中的不重传）或先「忘记设备」再全量。
+- Token 明文存 `phone_devices.token`（局域网单用户）；页面可留空，后端按地址匹配已保存 Token。
+
+### 21.3 数据模型（schema 003）
+
+```sql
+CREATE TABLE phone_devices (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_key      TEXT NOT NULL UNIQUE,
+  name            TEXT NOT NULL,
+  model           TEXT NOT NULL,
+  manufacturer    TEXT NOT NULL,
+  android_version TEXT NOT NULL,
+  last_addr       TEXT NOT NULL,
+  token           TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  last_seen_at    TEXT NOT NULL,
+  last_sync_at    TEXT,
+  last_checkpoint INTEGER NOT NULL DEFAULT 0,   -- 上一轮成功读完的 album/version 水位
+  last_status     TEXT,
+  last_batch_id   INTEGER
+);
+
+CREATE TABLE phone_media (
+  device_id           INTEGER NOT NULL REFERENCES phone_devices(id) ON DELETE CASCADE,
+  kind                TEXT NOT NULL CHECK (kind IN ('image', 'video')),
+  media_id            INTEGER NOT NULL,
+  display_name        TEXT NOT NULL,
+  generation_modified INTEGER NOT NULL,
+  size                INTEGER NOT NULL,
+  date_added          INTEGER NOT NULL,
+  width               INTEGER,
+  height              INTEGER,
+  hash                TEXT,          -- 下载后才知道；内容寻址，与 assets.hash 对应
+  status              TEXT NOT NULL, -- synced | failed | unsupported | missing
+  message             TEXT,
+  updated_at          TEXT NOT NULL,
+  PRIMARY KEY (device_id, kind, media_id)
+);
+
+ALTER TABLE import_batches ADD COLUMN source TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE import_batches ADD COLUMN device_id INTEGER;
+```
+
+账本的作用：
+
+1. **取消/中断后不重传**：checkpoint 不推进，下一轮重列同样的记录，账本命中的直接跳过。
+2. **失败自愈**：`status='failed'` 的条目在每轮开头优先重试（最多 500 条），避免一条永久失败把 checkpoint 卡死。
+3. **全量重扫只补不删**：generation 未变且资产仍在库的不下载；库内资产已删除的会重新拉一份。
+
+### 21.4 同步流程
+
+```text
+POST /api/phone/sync
+ 1. GET /v1/device/info        → 规范化地址后登记/更新设备（保留 checkpoint）
+ 2. GET /v1/album/version      → V（本轮水位）
+ 3. since = 新设备或 mode=full ? 0 : device.last_checkpoint
+ 4. GET /v1/album/media?kind=image → 分页（500/页）；kind=video 同理
+ 5. 账本比对 → 待下载清单（含上一轮失败项）
+ 6. 逐项 GET /v1/album/media/{id}/content 流式下载到 runtime/tmp，边下边算 SHA-256
+ 7. 查 assets(hash)：已有 → duplicate_skip；没有 → CAS 落盘（rename）→ Inspect → 时间解析 → ready
+ 8. 两种 kind 都翻完且未取消 → last_checkpoint = V
+```
+
+- 探测（`/api/phone/probe`）只读：不登记设备、不写账本，失败不会留下空批次。
+- 地址/Token/相册权限/能力开关在创建批次前就校验，错误直接返回中文原因（`2001/2002/2003/3002/3003` 都有对应文案）。
+- 地址只允许 `http(s)://host:port`：拒绝路径、查询、用户信息；客户端不跟随重定向，避免 Token 被带到其他主机。
+- 进度：`total` = 本轮要处理的条目数（含未变更），`unchanged` 单独计数；`bytes_total/bytes_done` 用于显示下载体积；`phase` 为 `listing` / `downloading`。
+
+### 21.5 逐项处理与去重
+
+| 情况 | 动作 |
+|---|---|
+| 扩展名不在白名单 | 不下载，计 `unsupported`，账本记 `unsupported` |
+| 账本 `synced` 且 generation 未变、资产在库 | 跳过，计 `unchanged` |
+| 账本 `synced` 但资产已被删 | 重新下载 |
+| 账本 generation 变化 / 无记录 / `failed` | 下载（失败重试） |
+| 账本 `missing`（手机侧 3001）且 generation 未变 | 跳过，不反复请求 |
+| 下载后 hash 命中库内 ready/trashed | `duplicate_skip`，账本记 `synced` |
+
+手机同步与本地导入共用同一套入库逻辑（`importer.ingest`）：查重、`importing` 中间态、大小校验、`media.Inspect`、时间解析、缩略图入队。差别只有两点：内容来源是「下载到临时文件后 rename 进 CAS」（避免大视频写两遍），重复内容一律自动跳过（手机是「补新」来源，不进「跳过/替换」列表）。
+
+时间解析优先级不变：EXIF → 文件名规则 → **手机 `dateAdded`**（替代本地文件的 mtime）→ 导入时间；`taken_at_source` 仍记为 `file_mtime`。
+
+`import_items.source_path` 用 `phone://<设备名>/<kind>/<id>/<文件名>`，CSV 报告与导入历史都能追溯来源；手机批次不会产生 `duplicate_pending`。未变更与类型不支持的条目不写 `import_items`（避免每轮几百行噪声，账本是它们的记录），因此 CSV 只列实际处理过（新增/重复/失败）的条目。
+
+### 21.6 API
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/phone/devices` | 设备列表（不含 Token）+ `counts`（synced/failed/unsupported/missing） |
+| POST | `/api/phone/probe` | `{address, token}` → 设备信息、是否已知、`address_changed`、上次同步、`version`、两类媒体的 `total/pending` |
+| POST | `/api/phone/sync` | `{address, token, mode, tags}` → `{batch_id}`；与本地导入互斥（忙则 409） |
+| DELETE | `/api/phone/devices/{id}` | 忘记设备（删设备与账本，不动图片） |
+
+进度/取消/CSV 报告复用 `/api/import/{batch}/*`；`ImportProgress` 增加 `source/device_name/phase/bytes_total/bytes_done/unchanged/checkpoint` 字段。
+
+### 21.7 前端
+
+- 导入页新增「从手机导入」面板（`PhoneImportPanel.vue`）：地址 + Token + 检查连接 + 标签 + 开始同步；检查通过前开始按钮不可用。
+- 检查结果：设备名/Android 版本/电量、新设备的全量数量、已知设备的待同步数量与上次同步时间；`address_changed` 时提示并默认勾选「全量重扫」。
+- 「已连接的手机」列表：增量同步 / 全量重扫 / 忘记；Token 未保存的禁用手动同步，提示重新填 Token。
+- 进度面板复用：手机批次多显示设备名、下载体积、未变更数量、列表阶段；手机批次隐藏「刷新重复列表」。
+
+### 21.8 异常与恢复
+
+- 取消：结束当前下载、删 `.part`、批次 `cancelled`、**不推进 checkpoint**；已完成的条目保留。
+- 进程崩溃：启动修复把 `running` 批次标 `interrupted`，并清理 `runtime/tmp/*.part`；checkpoint 未推进，下一轮重列，账本避免重传。
+- 单项失败：`status='failed'` 记账本，下一轮自动重试；3001 记 `missing` 不再重试。
+- 手机不可达/Token 变更/权限被关/能力关闭：probe 与 sync 都返回对应中文提示，不产生批次。
+- 开发/验收小规模：环境变量 `IPHOTO_PHONE_ITEM_LIMIT=N` 让图片与视频**各**只处理前 N 项，且**不推进 checkpoint**（避免把截断误判为已同步）。
+
+---
+
 文档到此。开发时若遇到文档未覆盖的取舍，按 **数据安全 > 简单可维护 > 性能 > 功能丰富** 的优先级决策。

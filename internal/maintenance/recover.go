@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"iphoto/internal/config"
@@ -19,6 +21,8 @@ type RecoverResult struct {
 	Ready   int
 	Removed int
 	Batches int64
+	// Temp 是清理掉的临时文件数量（手机导入中断遗留）。
+	Temp int
 }
 
 // RecoverInterrupted 处理进程崩溃遗留的中间状态：
@@ -74,7 +78,31 @@ func RecoverInterrupted(ctx context.Context, st *store.Store, paths config.Paths
 		return res, err
 	}
 	res.Batches = batches
+	res.Temp = cleanTempFiles(paths, log)
 	return res, nil
+}
+
+// cleanTempFiles 删除进程崩溃后遗留的 *.part 临时文件（手机导入使用 runtime/tmp）。
+func cleanTempFiles(paths config.Paths, log *slog.Logger) int {
+	entries, err := os.ReadDir(paths.Temp)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Warn("读取临时目录失败", "dir", paths.Temp, "err", err)
+		}
+		return 0
+	}
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".part") {
+			continue
+		}
+		if rmErr := os.Remove(filepath.Join(paths.Temp, entry.Name())); rmErr != nil {
+			log.Warn("清理临时文件失败", "name", entry.Name(), "err", rmErr)
+			continue
+		}
+		removed++
+	}
+	return removed
 }
 
 func intOrZero(p *int) int {

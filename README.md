@@ -6,12 +6,13 @@
 
 ## 当前状态
 
-**M1（存储与导入）、M2（浏览与查看）、M3（标签与相册）、M4（回收站/导出/设置）已完成；M5 打磨进行中。**
+**M1（存储与导入）、M2（浏览与查看）、M3（标签与相册）、M4（回收站/导出/设置）已完成；M5 打磨进行中；另外新增了「从手机（PhoneDock）增量导入」。**
 版本 `0.1.0`，单二进制内嵌前端，支持交叉编译。
 
 已完成功能：
 
 - **导入**：递归扫描、SHA-256 去重、CAS 两级目录、复制后大小校验、3 worker 并发、批次串行、取消、重复项（跳过/替换）、CSV 报告、启动时修复中断导入；**不支持的文件会被显式报告**（总数、按后缀计数、最多 100 个文件明细，CSV 同步）。支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff 与 mp4。
+- **手机导入（PhoneDock）**：局域网内的手机装上 PhoneDock 后，在导入页填地址 + 4 位 Token 即可拉取相册；设备按「厂商+型号」识别，首次全量、之后按 `GENERATION_MODIFIED` 水位增量；同步账本保证取消/重扫不重复传输，失败项自动重试；手机侧只读，删除不影响库内图片。
 - **浏览**：图库网格（按行虚拟滚动）、文件名/描述/**标签**搜索（支持 `AND`/`OR`/`NOT`、括号、引号短语与 `name:`/`note:`/`tag:` 字段前缀）、年月范围筛选、排序、**滚动到底部自动加载**。
 - **查看**：PhotoSwipe 查看器、上一张/下一张、**进一步放大（右上角工具栏 `−` / `+` / `1:1`）**、快捷键（`A` 上一张、`D` 下一张、`W` 放大、`S` 缩小、`Q` 退出、`G` 删除）、详情侧栏（备注、拍摄时间覆盖、**重命名（同步数据库与文件）**、**在系统文件浏览器中显示**、删除后**自动切到下一张**，最后一张删除后退出）；TIFF 由服务端转成 JPEG 预览后显示。
 - **视频（MVP）**：mp4 原文件入库（哈希/校验/导出/回收站与图片一致），查看器内用原生 `<video>` 播放（支持 Range 拖动）；网格缩略图由 ffmpeg 抽帧（可选依赖，未安装时占位）；视频不参与相似图片检测，MKV 等容器仍按「不支持」报告。
@@ -47,8 +48,9 @@ iphoto/
 ├── internal/
 │   ├── config/                # 端口、目录常量与路径解析
 │   ├── logging/               # slog + 按大小滚动
-│   ├── store/                 # SQLite：assets/tags/albums/imports/smart 规则
-│   ├── importer/              # 扫描、哈希、CAS、导入管理器、重命名
+│   ├── store/                 # SQLite：assets/tags/albums/imports/phone 设备与账本
+│   ├── importer/              # 扫描、哈希、CAS、导入管理器、重命名、手机同步
+│   ├── phonedock/             # PhoneDock v1 HTTP 客户端（信封、错误码、分页、下载）
 │   ├── search/                # 图库搜索表达式解析（AND/OR/NOT/括号/字段前缀）
 │   ├── similar/               # 相似图片检测：dHash、指纹缓存、相邻比对
 │   ├── timeparse/             # EXIF → 文件名规则 → mtime → 导入时间
@@ -56,7 +58,7 @@ iphoto/
 │   ├── maintenance/           # 启动时中断修复
 │   └── httpapi/               # 全部 /api 路由 + SPA 托管
 ├── web/
-│   ├── src/components/        # AssetGrid（虚拟滚动+自动加载）、PhotoViewer、AssetThumb、UnsupportedReport
+│   ├── src/components/        # AssetGrid（虚拟滚动+自动加载）、PhotoViewer、AssetThumb、UnsupportedReport、PhoneImportPanel
 │   ├── src/views/             # 图库/时间线/相似图片/相册/详情/标签/导入/回收站/设置
 │   └── dist/.gitkeep          # 占位；make web-build 生成真实产物
 └── scripts/{env,verify-env}.sh
@@ -84,6 +86,35 @@ make dev-web               # http://127.0.0.1:5173（/api 代理到后端）
 首次使用：打开「导入」页，输入本地照片目录绝对路径 → 扫描 → 开始导入。支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff 与 mp4，递归子目录，跳过隐藏文件与符号链接。动图 WebP 可导入和查看，但暂时没有网格缩略图（需要后续接入 libwebp）。MP4 原样入库、可在查看器中播放；缩略图依赖系统安装 ffmpeg（未安装时显示 ▶ 占位，不影响播放）。
 
 > 视频缩略图需要 `PATH` 中能找到 `ffmpeg`（macOS 可 `brew install ffmpeg`，Windows 可下载官方 build 并加入 PATH）；未安装时 MP4 仍可导入和播放，设置页「运行信息」会显示 ffmpeg 状态。
+
+## 从手机导入（PhoneDock）
+
+手机端安装并打开 [PhoneDock](../PhoneDock/README.md)，点「启动服务」，按屏幕上的地址与 4 位 Token 在导入页填写即可。
+
+1. 导入页 →「从手机导入」→ 填地址（如 `192.168.1.215:8765`，可省略 `http://`）与 Token。
+2. 点「检查连接」：显示设备名、Android 版本、图片/视频总数与本次待同步数量；**新设备会提示将从头读取**，已知设备显示上次同步时间。
+3. 选可选的导入标签 →「开始同步」。进度、取消、CSV 报告与本地导入共用下面那块批次面板。
+
+行为说明：
+
+- **设备识别**：按「厂商 + 型号」识别，手机换 IP 只更新地址，增量进度继续；同型号的第二台手机会命中同一条记录，检查结果会提示「地址与上次不同」，可勾选「全量重扫」或先「忘记」该设备。
+- **增量**：每轮开始取一次 `/v1/album/version` 作为水位，图片与视频都翻完后才把水位记成下一轮的 checkpoint；取消、鉴权失败、网络中断都不会推进进度。
+- **同步账本**（`phone_media`）：记录每个媒体已同步的哈希与 generation，取消后重扫、全量重扫都不会重复下载已入库内容；上一轮失败的会在一轮开头自动重试（最多 500 条）。
+- **去重**：仍以 SHA-256 内容寻址；手机上的图片若与库内已有内容相同（含不同文件名）自动跳过并计入「库内已有」。
+- **时间**：EXIF → 文件名规则 → 手机的 `dateAdded` → 导入时间（手机上拍照有 EXIF 时以 EXIF 为准）。
+- **格式**：与本地导入同一白名单；HEIC/MOV 等会显式报告为「类型不支持」，不下载。
+- **只读**：手机侧只读；手机删除图片不会从 iphoto 删除（保持库内不变）。下载串行（PhoneDock 原文件接口有传输锁、不支持 Range），首次全量就是按体积顺序走一遍。
+
+相关接口：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/phone/devices` | 已登记设备（不含 Token）+ 同步账本统计 |
+| POST | `/api/phone/probe` | 检查连接与待同步数量，不写库 |
+| POST | `/api/phone/sync` | `{address,token,mode:"incremental"\|"full",tags}` → `batch_id` |
+| DELETE | `/api/phone/devices/{id}` | 忘记设备（删同步记录，不动图片） |
+
+Token 以明文保存在 `library.sqlite` 的 `phone_devices.token`（局域网单用户场景，换取的是一键增量同步的便利）；`library/` 备份会一并带走。
 
 ## 搜索语法
 
@@ -138,7 +169,7 @@ make timecheck
 
 - 监听 `127.0.0.1:18765`，冲突即启动失败，不自动换端口。
 - 不提供 `config.json`；少量状态存 `app_settings`。
-- `library/` 是唯一需要备份的目录；`runtime/` 可随时删除。
+- `library/` 是唯一需要备份的目录（含手机设备的 Token 与同步账本）；`runtime/` 可随时删除（含手机导入临时文件 `runtime/tmp/`）。
 - 源图片只读，删除走回收站，CAS 文件不可变。
 
 ## 下一步（M5）

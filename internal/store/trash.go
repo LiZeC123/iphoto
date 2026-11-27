@@ -58,6 +58,7 @@ func (s *Store) ListBatches(ctx context.Context, limit int) ([]Batch, error) {
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT b.id, b.source_path, b.started_at, b.finished_at, b.status, b.stats_json,
+			b.source, b.device_id,
 			(SELECT count(*) FROM import_items i WHERE i.batch_id = b.id)
 		FROM import_batches b ORDER BY b.id DESC LIMIT ?`, limit)
 	if err != nil {
@@ -71,13 +72,19 @@ func (s *Store) ListBatches(ctx context.Context, limit int) ([]Batch, error) {
 			b        Batch
 			finished sql.NullString
 			stats    sql.NullString
+			deviceID sql.NullInt64
 			items    int64
 		)
-		if err := rows.Scan(&b.ID, &b.SourcePath, &b.StartedAt, &finished, &b.Status, &stats, &items); err != nil {
+		if err := rows.Scan(&b.ID, &b.SourcePath, &b.StartedAt, &finished, &b.Status, &stats,
+			&b.Source, &deviceID, &items); err != nil {
 			return nil, err
 		}
 		b.FinishedAt = nullStringPtr(finished)
 		b.StatsJSON = nullStringPtr(stats)
+		if deviceID.Valid {
+			v := deviceID.Int64
+			b.DeviceID = &v
+		}
 		b.ItemCount = items
 		out = append(out, b)
 	}

@@ -55,6 +55,16 @@ type Snapshot struct {
 	Current          string      `json:"current,omitempty"`
 	StartedAt        string      `json:"started_at"`
 	FinishedAt       *string     `json:"finished_at,omitempty"`
+
+	// 以下字段用于手机导入；本地导入时为空/零值。
+	Source     string `json:"source"`
+	DeviceID   int64  `json:"device_id,omitempty"`
+	DeviceName string `json:"device_name,omitempty"`
+	Phase      string `json:"phase,omitempty"`
+	BytesTotal int64  `json:"bytes_total,omitempty"`
+	BytesDone  int64  `json:"bytes_done,omitempty"`
+	Unchanged  int64  `json:"unchanged"`
+	Checkpoint int64  `json:"checkpoint,omitempty"`
 }
 
 // batchStats 是写入 import_batches.stats_json 的统计结构。
@@ -65,6 +75,14 @@ type batchStats struct {
 	DuplicatePending int64       `json:"duplicate_pending"`
 	Failed           int64       `json:"failed"`
 	Unsupported      Unsupported `json:"unsupported"`
+
+	Source     string `json:"source,omitempty"`
+	DeviceName string `json:"device_name,omitempty"`
+	Phase      string `json:"phase,omitempty"`
+	BytesTotal int64  `json:"bytes_total,omitempty"`
+	BytesDone  int64  `json:"bytes_done,omitempty"`
+	Unchanged  int64  `json:"unchanged,omitempty"`
+	Checkpoint int64  `json:"checkpoint,omitempty"`
 }
 
 // Resolution 是重复项处理动作。
@@ -108,13 +126,8 @@ func (m *Manager) Start(sourcePath string, tags []string) (int64, error) {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cleanTags := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		if trimmed := strings.TrimSpace(tag); trimmed != "" {
-			cleanTags = append(cleanTags, trimmed)
-		}
-	}
-	r := &run{startedAt: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), status: "running", tags: cleanTags}
+	r := &run{startedAt: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		status: "running", source: "local", tags: cleanTags(tags)}
 	batch, err := m.store.CreateBatch(ctx, abs, r.startedAt.Format(store.TimeLayout))
 	if err != nil {
 		cancel()
@@ -206,17 +219,27 @@ func (m *Manager) Progress(ctx context.Context, batchID int64) (Snapshot, error)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	var total int64
+	var (
+		total  int64
+		stats  batchStats
+		source = b.Source
+	)
+	if source == "" {
+		source = "local"
+	}
 	unsupported := newUnsupported()
 	if b.StatsJSON != nil {
-		var stats batchStats
 		if err := json.Unmarshal([]byte(*b.StatsJSON), &stats); err == nil {
 			total = stats.Total
 			unsupported = normalizeUnsupported(stats.Unsupported)
 		}
 	}
 	processed := counts["new"] + counts["duplicate_skip"] + counts["duplicate_pending"] +
-		counts["duplicate_replace"] + counts["failed"]
+		counts["duplicate_replace"] + counts["failed"] + stats.Unchanged
+	var deviceID int64
+	if b.DeviceID != nil {
+		deviceID = *b.DeviceID
+	}
 	return Snapshot{
 		BatchID:          b.ID,
 		Status:           b.Status,
@@ -229,6 +252,14 @@ func (m *Manager) Progress(ctx context.Context, batchID int64) (Snapshot, error)
 		Unsupported:      unsupported,
 		StartedAt:        b.StartedAt,
 		FinishedAt:       b.FinishedAt,
+		Source:           source,
+		DeviceID:         deviceID,
+		DeviceName:       stats.DeviceName,
+		Phase:            stats.Phase,
+		BytesTotal:       stats.BytesTotal,
+		BytesDone:        stats.BytesDone,
+		Unchanged:        stats.Unchanged,
+		Checkpoint:       stats.Checkpoint,
 	}, nil
 }
 
@@ -257,26 +288,7 @@ func UnsupportedFromStats(statsJSON *string) Unsupported {
 
 func (m *Manager) execute(r *run, root string) {
 	status := "done"
-	defer func() {
-		r.mu.Lock()
-		r.status = status
-		snapshot := r.snapshotLocked()
-		r.mu.Unlock()
-
-		stats, _ := json.Marshal(batchStats{
-			Total:            snapshot.Total,
-			Imported:         snapshot.Imported,
-			DuplicateSkipped: snapshot.DuplicateSkipped,
-			DuplicatePending: snapshot.DuplicatePending,
-			Failed:           snapshot.Failed,
-			Unsupported:      snapshot.Unsupported,
-		})
-		if err := m.store.FinishBatch(context.Background(), r.id, status,
-			time.Now().Format(store.TimeLayout), string(stats)); err != nil {
-			m.log.Error("结束导入批次失败", "batch", r.id, "err", err)
-		}
-		close(r.done)
-	}()
+	defer func() { m.finishBatch(r, status) }()
 
 	scan, err := Scan(root)
 	if err != nil {
@@ -292,14 +304,7 @@ func (m *Manager) execute(r *run, root string) {
 		return
 	}
 
-	rules, err := m.store.EnabledTimeRules(r.ctx)
-	if err != nil {
-		m.log.Error("读取时间解析规则失败", "err", err)
-	}
-	parseRules := make([]timeparse.Rule, 0, len(rules))
-	for _, rule := range rules {
-		parseRules = append(parseRules, timeparse.Rule{ID: rule.ID, Pattern: rule.Pattern})
-	}
+	parseRules := m.loadTimeRules(r.ctx)
 
 	workers := m.Workers
 	if workers <= 0 {
@@ -342,6 +347,31 @@ loop:
 	}
 }
 
+// dupMode 决定「内容相同、文件名不同」时如何处理。
+type dupMode int
+
+const (
+	// dupKeepPending 是本地导入：放进重复列表，等用户选择跳过/替换。
+	dupKeepPending dupMode = iota
+	// dupAutoSkip 是手机导入：手机是「补新」来源，内容已存在就跳过。
+	dupAutoSkip
+)
+
+// ingestResult 是一次单文件入库的结果，供不同数据源决定后续记账。
+type ingestResult struct {
+	Status  string // new | duplicate_skip | duplicate_pending | failed
+	Message string
+}
+
+// assetMeta 是入库时按数据源不同的附加信息。
+type assetMeta struct {
+	// ModTime 是时间解析的兜底：本地是文件 mtime，手机是 MediaStore 的 dateAdded。
+	ModTime time.Time
+	// Width/Height 只在 Inspect 解不出尺寸时用作兜底（视频、无法解码的图片）。
+	Width  int
+	Height int
+}
+
 func (m *Manager) process(r *run, source string, rules []timeparse.Rule) {
 	if r.ctx.Err() != nil {
 		return
@@ -354,6 +384,23 @@ func (m *Manager) process(r *run, source string, rules []timeparse.Rule) {
 		m.record(r, source, "", "failed", err.Error())
 		return
 	}
+	stat, err := os.Stat(source)
+	if err != nil {
+		m.record(r, source, hash, "failed", "读取源文件时间："+err.Error())
+		return
+	}
+
+	m.ingest(r, source, name, hash, size, assetMeta{ModTime: stat.ModTime()}, dupKeepPending,
+		func(relPath string) (int64, error) {
+			return CopyBlob(m.paths.Blobs, relPath, source)
+		}, rules)
+}
+
+// ingest 是本地扫描与手机同步共用的入库流程：
+// 查重 → 插入 importing → 落盘（由 commit 决定复制还是移动） → 探测 → 置 ready。
+// 结果同时写入 import_items 并更新进度计数。
+func (m *Manager) ingest(r *run, source, name, hash string, size int64, meta assetMeta,
+	mode dupMode, commit func(relPath string) (int64, error), rules []timeparse.Rule) ingestResult {
 
 	m.dedupeMu.Lock()
 	existing, err := m.store.GetAsset(r.ctx, hash)
@@ -361,25 +408,24 @@ func (m *Manager) process(r *run, source string, rules []timeparse.Rule) {
 		m.dedupeMu.Unlock()
 		switch {
 		case existing.Status == "trashed":
-			m.record(r, source, hash, "duplicate_skip", "回收站已有相同内容，已跳过")
+			return m.recordResult(r, source, hash, "duplicate_skip", "回收站已有相同内容，已跳过")
 		case existing.OriginalName == name:
-			m.record(r, source, hash, "duplicate_skip", "内容与文件名均相同，已跳过")
+			return m.recordResult(r, source, hash, "duplicate_skip", "内容与文件名均相同，已跳过")
+		case mode == dupAutoSkip:
+			return m.recordResult(r, source, hash, "duplicate_skip", "库中已有相同内容："+existing.OriginalName)
 		default:
-			m.record(r, source, hash, "duplicate_pending", "内容相同但文件名不同："+existing.OriginalName)
+			return m.recordResult(r, source, hash, "duplicate_pending", "内容相同但文件名不同："+existing.OriginalName)
 		}
-		return
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		m.dedupeMu.Unlock()
-		m.record(r, source, hash, "failed", "查询库内记录失败："+err.Error())
-		return
+		return m.recordResult(r, source, hash, "failed", "查询库内记录失败："+err.Error())
 	}
 
 	relPath, storageName, err := PlanTarget(m.paths.Blobs, name, hash)
 	if err != nil {
 		m.dedupeMu.Unlock()
-		m.record(r, source, hash, "failed", err.Error())
-		return
+		return m.recordResult(r, source, hash, "failed", err.Error())
 	}
 	asset := store.Asset{
 		Hash:         hash,
@@ -393,12 +439,11 @@ func (m *Manager) process(r *run, source string, rules []timeparse.Rule) {
 	}
 	if err := m.store.InsertImportingAsset(r.ctx, asset); err != nil {
 		m.dedupeMu.Unlock()
-		m.record(r, source, hash, "failed", err.Error())
-		return
+		return m.recordResult(r, source, hash, "failed", err.Error())
 	}
 	m.dedupeMu.Unlock()
 
-	if err := m.finishImport(r, source, name, hash, size, relPath, rules); err != nil {
+	if err := m.finishAsset(r, name, hash, size, relPath, meta, commit, rules); err != nil {
 		// 回滚半成品：删除物理文件与 importing 记录。
 		if rmErr := os.Remove(m.paths.BlobPath(relPath)); rmErr != nil && !os.IsNotExist(rmErr) {
 			m.log.Warn("回滚半成品文件失败", "path", relPath, "err", rmErr)
@@ -406,44 +451,114 @@ func (m *Manager) process(r *run, source string, rules []timeparse.Rule) {
 		if dbErr := m.store.DeleteAssetRow(context.Background(), hash); dbErr != nil {
 			m.log.Error("回滚 assets 记录失败", "hash", hash, "err", dbErr)
 		}
-		m.record(r, source, hash, "failed", err.Error())
-		return
+		return m.recordResult(r, source, hash, "failed", err.Error())
 	}
-	m.record(r, source, hash, "new", "")
+	return m.recordResult(r, source, hash, "new", "")
 }
 
-func (m *Manager) finishImport(r *run, source, name, hash string, size int64, relPath string, rules []timeparse.Rule) error {
-	written, err := CopyBlob(m.paths.Blobs, relPath, source)
+func (m *Manager) finishAsset(r *run, name, hash string, size int64, relPath string,
+	meta assetMeta, commit func(relPath string) (int64, error), rules []timeparse.Rule) error {
+
+	written, err := commit(relPath)
 	if err != nil {
 		return err
 	}
 	if written != size {
-		return fmt.Errorf("复制后大小校验失败：源 %d 字节，目标 %d 字节", size, written)
+		return fmt.Errorf("落盘后大小校验失败：源 %d 字节，目标 %d 字节", size, written)
 	}
 
 	info, err := media.Inspect(m.paths.BlobPath(relPath))
 	if err != nil {
 		return err
 	}
-	srcStat, err := os.Stat(source)
-	if err != nil {
-		return fmt.Errorf("读取源文件时间: %w", err)
+	width, height := info.Width, info.Height
+	if width <= 0 {
+		width = meta.Width
 	}
-	res := timeparse.Parse(name, info.TakenAt, info.TakenAtTag, srcStat.ModTime(), time.Now(), rules)
+	if height <= 0 {
+		height = meta.Height
+	}
+	if info.MIME == "" {
+		info.MIME = media.MIMEOf(name)
+	}
+	modTime := meta.ModTime
+	if modTime.IsZero() {
+		modTime = time.Now()
+	}
+	res := timeparse.Parse(name, info.TakenAt, info.TakenAtTag, modTime, time.Now(), rules)
 	if err := m.store.MarkAssetReady(r.ctx, hash, written, info.MIME,
-		&info.Width, &info.Height, timeparse.Format(res.At), res.Source); err != nil {
+		&width, &height, timeparse.Format(res.At), res.Source); err != nil {
 		return err
 	}
 	m.thumbs.Enqueue(hash, relPath)
 	return nil
 }
 
+// cleanTags 去掉标签首尾空白与空项。
+func cleanTags(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if trimmed := strings.TrimSpace(tag); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// loadTimeRules 读取启用中的时间解析规则，供本地导入与手机同步共用。
+func (m *Manager) loadTimeRules(ctx context.Context) []timeparse.Rule {
+	rules, err := m.store.EnabledTimeRules(ctx)
+	if err != nil {
+		m.log.Error("读取时间解析规则失败", "err", err)
+	}
+	out := make([]timeparse.Rule, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, timeparse.Rule{ID: rule.ID, Pattern: rule.Pattern})
+	}
+	return out
+}
+
+// finishBatch 写入最终状态与统计，并通知等待者。
+func (m *Manager) finishBatch(r *run, status string) {
+	r.mu.Lock()
+	r.status = status
+	snapshot := r.snapshotLocked()
+	r.mu.Unlock()
+
+	stats, _ := json.Marshal(batchStats{
+		Total:            snapshot.Total,
+		Imported:         snapshot.Imported,
+		DuplicateSkipped: snapshot.DuplicateSkipped,
+		DuplicatePending: snapshot.DuplicatePending,
+		Failed:           snapshot.Failed,
+		Unsupported:      snapshot.Unsupported,
+		Source:           snapshot.Source,
+		DeviceName:       snapshot.DeviceName,
+		Phase:            snapshot.Phase,
+		BytesTotal:       snapshot.BytesTotal,
+		BytesDone:        snapshot.BytesDone,
+		Unchanged:        snapshot.Unchanged,
+		Checkpoint:       snapshot.Checkpoint,
+	})
+	if err := m.store.FinishBatch(context.Background(), r.id, status,
+		time.Now().Format(store.TimeLayout), string(stats)); err != nil {
+		m.log.Error("结束导入批次失败", "batch", r.id, "err", err)
+	}
+	close(r.done)
+}
+
 func (m *Manager) record(r *run, source, hash, status, message string) {
+	m.recordResult(r, source, hash, status, message)
+}
+
+// recordResult 与 record 相同，但把结果返回给调用方（手机同步需要据此写账本）。
+func (m *Manager) recordResult(r *run, source, hash, status, message string) ingestResult {
 	ctx := context.Background()
 	if _, err := m.store.AddImportItem(ctx, r.id, source, hash, status, message); err != nil {
 		m.log.Error("写入导入明细失败", "source", source, "err", err)
 	}
 	r.addResult(status, hash)
+	return ingestResult{Status: status, Message: message}
 }
 
 // ResolveDuplicates 处理“跳过 / 替换”选择。
@@ -550,6 +665,16 @@ type run struct {
 	tags        []string
 	newHashes   []string
 	unsupported Unsupported
+
+	// 手机导入相关（本地导入时保持零值）。
+	source     string
+	deviceID   int64
+	deviceName string
+	phase      string
+	bytesTotal int64
+	bytesDone  int64
+	unchanged  int64
+	checkpoint int64
 }
 
 func (r *run) tagList() []string {
@@ -573,6 +698,39 @@ func (r *run) setTotal(n int64) {
 func (r *run) setUnsupported(u Unsupported) {
 	r.mu.Lock()
 	r.unsupported = u
+	r.mu.Unlock()
+}
+
+func (r *run) setPhase(phase string) {
+	r.mu.Lock()
+	r.phase = phase
+	r.mu.Unlock()
+}
+
+func (r *run) setPhoneMeta(deviceID int64, deviceName string, checkpoint int64) {
+	r.mu.Lock()
+	r.source = "phone"
+	r.deviceID = deviceID
+	r.deviceName = deviceName
+	r.checkpoint = checkpoint
+	r.mu.Unlock()
+}
+
+func (r *run) addBytes(n int64) {
+	r.mu.Lock()
+	r.bytesDone += n
+	r.mu.Unlock()
+}
+
+func (r *run) setBytesTotal(n int64) {
+	r.mu.Lock()
+	r.bytesTotal = n
+	r.mu.Unlock()
+}
+
+func (r *run) addUnchanged() {
+	r.mu.Lock()
+	r.unchanged++
 	r.mu.Unlock()
 }
 
@@ -607,11 +765,15 @@ func (r *run) snapshot() Snapshot {
 }
 
 func (r *run) snapshotLocked() Snapshot {
+	source := r.source
+	if source == "" {
+		source = "local"
+	}
 	return Snapshot{
 		BatchID:          r.id,
 		Status:           r.status,
 		Total:            r.total,
-		Processed:        r.imported + r.dupSkip + r.dupPend + r.failed,
+		Processed:        r.imported + r.dupSkip + r.dupPend + r.failed + r.unchanged,
 		Imported:         r.imported,
 		DuplicateSkipped: r.dupSkip,
 		DuplicatePending: r.dupPend,
@@ -619,5 +781,13 @@ func (r *run) snapshotLocked() Snapshot {
 		Unsupported:      normalizeUnsupported(r.unsupported),
 		Current:          r.current,
 		StartedAt:        r.startedAt.Format(store.TimeLayout),
+		Source:           source,
+		DeviceID:         r.deviceID,
+		DeviceName:       r.deviceName,
+		Phase:            r.phase,
+		BytesTotal:       r.bytesTotal,
+		BytesDone:        r.bytesDone,
+		Unchanged:        r.unchanged,
+		Checkpoint:       r.checkpoint,
 	}
 }

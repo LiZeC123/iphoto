@@ -294,7 +294,10 @@ onMounted(async () => {
         </thead>
         <tbody>
           <tr v-for="batch in batches" :key="batch.id">
-            <td>#{{ batch.id }}</td>
+            <td>
+              #{{ batch.id }}
+              <span v-if="batch.source === 'phone'" class="tag">手机</span>
+            </td>
             <td class="mono ellipsis" :title="batch.source_path">{{ batch.source_path }}</td>
             <td class="dim">{{ batch.status }}</td>
             <td class="dim">{{ batch.item_count }}</td>

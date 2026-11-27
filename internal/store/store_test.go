@@ -19,20 +19,21 @@ func TestOpenMigrates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("user_version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("user_version = %d, want 3", version)
 	}
 
 	var tables int
 	if err := s.DB().QueryRow(
 		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN
 		 ('assets','tags','asset_tags','albums','album_items','time_parse_rules',
-		  'import_batches','import_items','app_settings','operations','asset_signatures')`,
+		  'import_batches','import_items','app_settings','operations','asset_signatures',
+		  'phone_devices','phone_media')`,
 	).Scan(&tables); err != nil {
 		t.Fatalf("统计表数量: %v", err)
 	}
-	if tables != 11 {
-		t.Fatalf("表数量 = %d, want 11", tables)
+	if tables != 13 {
+		t.Fatalf("表数量 = %d, want 13", tables)
 	}
 
 	var rules int
@@ -86,11 +87,15 @@ func TestMigrateFromV1ToV2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	// 模拟 001 时代的库：删除 002 引入的对象并回退版本号。
+	// 模拟 001 时代的库：删除 002、003 引入的对象并回退版本号。
 	for _, stmt := range []string{
 		`DROP INDEX IF EXISTS idx_assets_effective_time`,
 		`DROP INDEX IF EXISTS idx_asset_signatures_algorithm`,
 		`DROP TABLE IF EXISTS asset_signatures`,
+		`DROP TABLE IF EXISTS phone_media`,
+		`DROP TABLE IF EXISTS phone_devices`,
+		`ALTER TABLE import_batches DROP COLUMN device_id`,
+		`ALTER TABLE import_batches DROP COLUMN source`,
 		`PRAGMA user_version = 1`,
 	} {
 		if _, err := s.DB().Exec(stmt); err != nil {
@@ -111,8 +116,8 @@ func TestMigrateFromV1ToV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 {
-		t.Fatalf("升级后 user_version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("升级后 user_version = %d, want 3", version)
 	}
 	var table int
 	if err := upgraded.DB().QueryRow(
@@ -129,5 +134,60 @@ func TestMigrateFromV1ToV2(t *testing.T) {
 	}
 	if index != 1 {
 		t.Fatal("升级后缺少 idx_assets_effective_time 索引")
+	}
+}
+
+// TestMigrateFromV2ToV3 验证 v2 库升级时会补上手机设备表与批次来源列，且旧批次为 local。
+func TestMigrateFromV2ToV3(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "library.sqlite")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := s.DB().Exec(
+		`INSERT INTO import_batches (source_path, started_at, status) VALUES ('/tmp/old', '2026-01-01T00:00:00+08:00', 'done')`,
+	); err != nil {
+		t.Fatalf("插入旧批次: %v", err)
+	}
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS phone_media`,
+		`DROP TABLE IF EXISTS phone_devices`,
+		`ALTER TABLE import_batches DROP COLUMN device_id`,
+		`ALTER TABLE import_batches DROP COLUMN source`,
+		`PRAGMA user_version = 2`,
+	} {
+		if _, err := s.DB().Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("升级 Open: %v", err)
+	}
+	defer upgraded.Close()
+
+	if v, err := upgraded.SchemaVersion(); err != nil || v != 3 {
+		t.Fatalf("升级后 user_version = %d, %v", v, err)
+	}
+	var tables int
+	if err := upgraded.DB().QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('phone_devices','phone_media')`,
+	).Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 2 {
+		t.Fatalf("手机相关表数量 = %d, want 2", tables)
+	}
+	var source string
+	if err := upgraded.DB().QueryRow(
+		`SELECT source FROM import_batches WHERE source_path = '/tmp/old'`).Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	if source != "local" {
+		t.Fatalf("旧批次 source = %q, want local", source)
 	}
 }

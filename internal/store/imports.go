@@ -15,6 +15,10 @@ type Batch struct {
 	Status     string  `json:"status"`
 	StatsJSON  *string `json:"stats_json,omitempty"`
 	ItemCount  int64   `json:"item_count"`
+	// Source 为 local 或 phone；旧批次默认 local。
+	Source string `json:"source"`
+	// DeviceID 仅手机导入批次有值。
+	DeviceID *int64 `json:"device_id,omitempty"`
 }
 
 // ImportItem 对应 import_items。
@@ -46,11 +50,20 @@ type ReportRow struct {
 	Message    string
 }
 
-// CreateBatch 开始一条导入批次。
+// CreateBatch 开始一条本地导入批次。
 func (s *Store) CreateBatch(ctx context.Context, sourcePath, startedAt string) (Batch, error) {
+	return s.CreateBatchWithSource(ctx, sourcePath, startedAt, "local", nil)
+}
+
+// CreateBatchWithSource 开始一条指定来源的导入批次（local 或 phone）。
+func (s *Store) CreateBatchWithSource(ctx context.Context, sourcePath, startedAt, source string, deviceID *int64) (Batch, error) {
+	if source == "" {
+		source = "local"
+	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO import_batches (source_path, started_at, status) VALUES (?, ?, 'running')`,
-		sourcePath, startedAt)
+		`INSERT INTO import_batches (source_path, started_at, status, source, device_id)
+		 VALUES (?, ?, 'running', ?, ?)`,
+		sourcePath, startedAt, source, deviceID)
 	if err != nil {
 		return Batch{}, fmt.Errorf("创建导入批次: %w", err)
 	}
@@ -58,7 +71,7 @@ func (s *Store) CreateBatch(ctx context.Context, sourcePath, startedAt string) (
 	if err != nil {
 		return Batch{}, err
 	}
-	return Batch{ID: id, SourcePath: sourcePath, StartedAt: startedAt, Status: "running"}, nil
+	return Batch{ID: id, SourcePath: sourcePath, StartedAt: startedAt, Status: "running", Source: source, DeviceID: deviceID}, nil
 }
 
 // GetBatch 读取批次。
@@ -67,15 +80,21 @@ func (s *Store) GetBatch(ctx context.Context, id int64) (Batch, error) {
 		b        Batch
 		finished sql.NullString
 		stats    sql.NullString
+		deviceID sql.NullInt64
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, source_path, started_at, finished_at, status, stats_json FROM import_batches WHERE id = ?`, id).
-		Scan(&b.ID, &b.SourcePath, &b.StartedAt, &finished, &b.Status, &stats)
+		`SELECT id, source_path, started_at, finished_at, status, stats_json, source, device_id
+		 FROM import_batches WHERE id = ?`, id).
+		Scan(&b.ID, &b.SourcePath, &b.StartedAt, &finished, &b.Status, &stats, &b.Source, &deviceID)
 	if err != nil {
 		return Batch{}, err
 	}
 	b.FinishedAt = nullStringPtr(finished)
 	b.StatsJSON = nullStringPtr(stats)
+	if deviceID.Valid {
+		v := deviceID.Int64
+		b.DeviceID = &v
+	}
 	return b, nil
 }
 

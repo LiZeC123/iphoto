@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"iphoto/internal/config"
 	"iphoto/internal/media"
@@ -99,6 +100,19 @@ func (q *Queue) generate(j job) {
 		return
 	}
 	q.log.Warn("缩略图生成失败，本次运行不再重试", "hash", j.hash, "err", err)
+}
+
+// Wait 等待已入队的缩略图处理完（测试与优雅关闭使用）。
+func (q *Queue) Wait() {
+	for {
+		q.mu.Lock()
+		pending := len(q.pending)
+		q.mu.Unlock()
+		if pending == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // Enqueue 非阻塞入队；已存在缩略图或已在队列中则忽略。

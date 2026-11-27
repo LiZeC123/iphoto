@@ -5,6 +5,7 @@ import { importApi } from '@/api/import'
 import { basename, errorMessage, settingsApi } from '@/api/settings'
 import type { DuplicateItem, ImportProgress, ImportScan, UnsupportedInfo } from '@/api/types'
 import PageShell from '@/components/PageShell.vue'
+import PhoneImportPanel from '@/components/PhoneImportPanel.vue'
 import TagSelector from '@/components/TagSelector.vue'
 import UnsupportedReport from '@/components/UnsupportedReport.vue'
 import { formatBytes, formatPercent } from '@/utils/format'
@@ -24,6 +25,7 @@ let timer: ReturnType<typeof setTimeout> | undefined
 
 const batchId = computed(() => progress.value?.batch_id ?? 0)
 const running = computed(() => progress.value?.status === 'running')
+const isPhone = computed(() => progress.value?.source === 'phone')
 const percent = computed(() =>
   formatPercent(progress.value?.processed ?? 0, progress.value?.total ?? 0),
 )
@@ -169,6 +171,27 @@ async function cleanup(): Promise<void> {
   }
 }
 
+/** 手机面板启动同步后，立刻接管进度显示（沿用现有的轮询逻辑）。 */
+function onPhoneStarted(batchId: number): void {
+  scan.value = null
+  duplicates.value = []
+  progress.value = {
+    batch_id: batchId,
+    status: 'running',
+    total: 0,
+    processed: 0,
+    imported: 0,
+    duplicate_skipped: 0,
+    duplicate_pending: 0,
+    failed: 0,
+    unsupported: emptyUnsupported(),
+    started_at: '',
+    source: 'phone',
+  }
+  clearTimer()
+  timer = setTimeout(() => void refresh(batchId), 300)
+}
+
 onMounted(async () => {
   try {
     const settings = await settingsApi.all()
@@ -198,8 +221,11 @@ onBeforeUnmount(clearTimer)
 </script>
 
 <template>
-  <PageShell title="导入" subtitle="输入本地目录绝对路径，递归扫描后导入到 library/。">
+  <PageShell title="导入" subtitle="从本地目录或手机（PhoneDock）导入到 library/。">
     <section class="panel">
+      <div class="panel-head">
+        <h2>从本地目录导入</h2>
+      </div>
       <label class="field-label" for="src-path">源目录</label>
       <div class="toolbar">
         <input
@@ -238,6 +264,8 @@ onBeforeUnmount(clearTimer)
       </p>
     </section>
 
+    <PhoneImportPanel :busy="running" @started="onPhoneStarted" />
+
     <p v-if="error" class="banner error">{{ error }}</p>
     <p v-if="notice" class="banner">{{ notice }}</p>
 
@@ -246,8 +274,11 @@ onBeforeUnmount(clearTimer)
         <h2>
           批次 #{{ progress.batch_id }}
           <span class="tag">{{ statusText }}</span>
+          <span v-if="isPhone" class="tag">{{ progress.device_name || '手机' }}</span>
         </h2>
-        <button v-if="running" class="btn btn-danger" @click="cancelImport">取消导入</button>
+        <button v-if="running" class="btn btn-danger" @click="cancelImport">
+          {{ isPhone ? '取消同步' : '取消导入' }}
+        </button>
       </div>
 
       <div class="progress-track">
@@ -256,22 +287,35 @@ onBeforeUnmount(clearTimer)
       <div class="stat-row">
         <span>{{ progress.processed }} / {{ progress.total }}（{{ percent }}%）</span>
         <span>新增 {{ progress.imported }}</span>
-        <span>跳过 {{ progress.duplicate_skipped }}</span>
-        <span>待处理重复 {{ progress.duplicate_pending }}</span>
+        <span v-if="isPhone">未变更 {{ progress.unchanged ?? 0 }}</span>
+        <span v-if="!isPhone">跳过 {{ progress.duplicate_skipped }}</span>
+        <span v-if="isPhone && progress.duplicate_skipped">库内已有 {{ progress.duplicate_skipped }}</span>
+        <span v-if="!isPhone">待处理重复 {{ progress.duplicate_pending }}</span>
         <span>失败 {{ progress.failed }}</span>
         <span v-if="progress.unsupported.total" class="warn-text">
           类型不支持 {{ progress.unsupported.total }}
         </span>
+        <span v-if="isPhone && progress.bytes_total" class="dim">
+          下载 {{ formatBytes(progress.bytes_done ?? 0) }} / {{ formatBytes(progress.bytes_total) }}
+        </span>
         <span v-if="progress.current" class="dim current">
           {{ basename(progress.current ?? '') }}
         </span>
+        <span v-else-if="running && isPhone" class="dim">
+          {{ progress.phase === 'listing' ? '读取手机媒体列表…' : '准备中…' }}
+        </span>
       </div>
+
+      <p v-if="isPhone && !running && !progress.total && progress.status === 'done'" class="hint">
+        本次没有新增或变更的媒体，已把本轮手机媒体库水位记为
+        <span class="mono">{{ progress.checkpoint }}</span>。
+      </p>
 
       <UnsupportedReport :info="progress.unsupported" />
 
       <div v-if="!running" class="toolbar">
         <a v-if="batchId" class="btn" :href="reportUrl" download>导出 CSV 报告</a>
-        <button class="btn" @click="loadDuplicates(batchId)">刷新重复列表</button>
+        <button v-if="!isPhone" class="btn" @click="loadDuplicates(batchId)">刷新重复列表</button>
         <button class="btn" @click="cleanup">清理导入历史</button>
       </div>
     </section>

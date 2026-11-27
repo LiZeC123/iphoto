@@ -40,6 +40,39 @@ func newUnsupported() Unsupported {
 	return Unsupported{ByExt: make([]ExtCount, 0, 4), Files: make([]string, 0, 16)}
 }
 
+// unsupportedTracker 汇总「类型不支持」的文件，扫描与手机同步共用。
+type unsupportedTracker struct {
+	total  int
+	files  []string
+	counts map[string]int
+}
+
+func newUnsupportedTracker() *unsupportedTracker {
+	return &unsupportedTracker{counts: map[string]int{}}
+}
+
+// add 记录一个不支持的文件。label 用于取后缀与展示（最多保留前 100 个）。
+func (t *unsupportedTracker) add(label string) {
+	ext := strings.ToLower(filepath.Ext(label))
+	if ext == "" {
+		ext = "(无后缀)"
+	}
+	t.counts[ext]++
+	t.total++
+	if len(t.files) < UnsupportedFileListLimit {
+		t.files = append(t.files, label)
+	}
+}
+
+func (t *unsupportedTracker) result() Unsupported {
+	u := newUnsupported()
+	u.Total = t.total
+	u.Files = append(u.Files, t.files...)
+	u.ByExt = sortExtCounts(t.counts)
+	u.Truncated = u.Total > len(u.Files)
+	return u
+}
+
 // ScanResult 是递归扫描结果。
 type ScanResult struct {
 	Path        string      `json:"path"`
@@ -80,8 +113,7 @@ func Scan(root string) (ScanResult, error) {
 	seen := make(map[string]struct{})
 	files := make([]string, 0, 256)
 	unreadable := 0
-	unsupported := newUnsupported()
-	extCounts := make(map[string]int)
+	unsupported := newUnsupportedTracker()
 
 	err = filepath.WalkDir(abs, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -113,19 +145,11 @@ func Scan(root string) (ScanResult, error) {
 		}
 		if !media.IsSupported(name) {
 			// 记录被静默跳过的文件，供导入页提示用户。
-			ext := strings.ToLower(filepath.Ext(name))
-			if ext == "" {
-				ext = "(无后缀)"
+			rel, relErr := filepath.Rel(abs, p)
+			if relErr != nil {
+				rel = p
 			}
-			extCounts[ext]++
-			unsupported.Total++
-			if len(unsupported.Files) < UnsupportedFileListLimit {
-				rel, relErr := filepath.Rel(abs, p)
-				if relErr != nil {
-					rel = p
-				}
-				unsupported.Files = append(unsupported.Files, filepath.ToSlash(rel))
-			}
+			unsupported.add(filepath.ToSlash(rel))
 			return nil
 		}
 		clean := filepath.Clean(p)
@@ -142,14 +166,12 @@ func Scan(root string) (ScanResult, error) {
 
 	sort.Strings(files)
 
-	unsupported.Truncated = unsupported.Total > len(unsupported.Files)
-	unsupported.ByExt = sortExtCounts(extCounts)
 	return ScanResult{
 		Path:        abs,
 		Total:       len(files),
 		Files:       files,
 		Unreadable:  unreadable,
-		Unsupported: unsupported,
+		Unsupported: unsupported.result(),
 	}, nil
 }
 
