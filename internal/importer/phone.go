@@ -389,7 +389,7 @@ func (m *Manager) executePhone(r *run, sess phoneSession, device store.PhoneDevi
 	unsupported := newUnsupportedTracker()
 	var bytesTotal int64
 	for _, item := range items {
-		action := m.planPhoneItem(r, item, index)
+		action := m.planPhoneItem(item, index)
 		switch action {
 		case phoneActionUnsupported:
 			unsupported.add(phoneSourcePath(device.Name, item))
@@ -511,7 +511,7 @@ type phoneWorkItem struct {
 }
 
 // planPhoneItem 依据账本决定单个媒体的处理方式。
-func (m *Manager) planPhoneItem(r *run, item phonedock.MediaItem, index map[string]store.PhoneMedia) phoneAction {
+func (m *Manager) planPhoneItem(item phonedock.MediaItem, index map[string]store.PhoneMedia) phoneAction {
 	entry, ok := index[store.PhoneMediaKey(item.Kind, item.ID)]
 
 	if !media.IsSupported(item.DisplayName) {
@@ -530,28 +530,18 @@ func (m *Manager) planPhoneItem(r *run, item phonedock.MediaItem, index map[stri
 	switch entry.Status {
 	case store.PhoneMediaSynced:
 		if entry.Hash == nil {
+			// 账本异常（synced 却没有哈希）时补拉一次，修复记录。
 			return phoneActionDownload
 		}
-		if m.assetStillPresent(r.ctx, *entry.Hash) {
-			return phoneActionUnchanged
-		}
-		// 库内资产已被删除（回收站清空等），重新拉一份。
-		return phoneActionDownload
+		// 以账本为准：这张媒体已经处理过。之后在 iphoto 里删除（含清空回收站）
+		// 是用户的最终决定，不因为库内资产不存在就重新导入——删除语义以 PC 为准。
+		return phoneActionUnchanged
 	case store.PhoneMediaMissing:
 		// 手机侧此前已报 3001，generation 未变就不再反复请求。
 		return phoneActionUnchanged
 	default:
 		return phoneActionDownload
 	}
-}
-
-// assetStillPresent 判断哈希对应的资产是否还值得跳过（ready 或回收站中的同样算「库里有」）。
-func (m *Manager) assetStillPresent(ctx context.Context, hash string) bool {
-	asset, err := m.store.GetAsset(ctx, hash)
-	if err != nil {
-		return false
-	}
-	return asset.Status == "ready" || asset.Status == "trashed"
 }
 
 // syncPhoneItem 下载单个媒体并入库，然后更新账本。

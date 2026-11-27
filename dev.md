@@ -883,11 +883,14 @@ POST /api/phone/sync
 | 情况 | 动作 |
 |---|---|
 | 扩展名不在白名单 | 不下载，计 `unsupported`，账本记 `unsupported` |
-| 账本 `synced` 且 generation 未变、资产在库 | 跳过，计 `unchanged` |
-| 账本 `synced` 但资产已被删 | 重新下载 |
+| 账本 `synced` 且 generation 未变（**无论库内资产是否还在**） | 跳过，计 `unchanged` |
 | 账本 generation 变化 / 无记录 / `failed` | 下载（失败重试） |
 | 账本 `missing`（手机侧 3001）且 generation 未变 | 跳过，不反复请求 |
 | 下载后 hash 命中库内 ready/trashed | `duplicate_skip`，账本记 `synced` |
+
+**删除语义以 PC 为准**：账本决定「这张手机媒体是否处理过」，不依赖库内资产是否仍然存在。同步过的图片之后在 iphoto 里删除到回收站或清空回收站，都不会被手机同步重新导入（全量重扫也一样）；手机侧仍未删除的原图不会「覆盖回来」。唯一的重置入口是「忘记设备」：级联删除设备与账本，下次连接重新全量导入（包括已在 iphoto 删除的图片）——UI 上必须写清这一点。
+
+例外：手机上重新保存出一份内容相同但 `media_id` 不同的图片，属于一条新记录，会作为新导入处理（账本按 `(kind, media_id)` 记账）。
 
 手机同步与本地导入共用同一套入库逻辑（`importer.ingest`）：查重、`importing` 中间态、大小校验、`media.Inspect`、时间解析、缩略图入队。差别只有两点：内容来源是「下载到临时文件后 rename 进 CAS」（避免大视频写两遍），重复内容一律自动跳过（手机是「补新」来源，不进「跳过/替换」列表）。
 
@@ -919,6 +922,7 @@ POST /api/phone/sync
 - 进程崩溃：启动修复把 `running` 批次标 `interrupted`，并清理 `runtime/tmp/*.part`；checkpoint 未推进，下一轮重列，账本避免重传。
 - 单项失败：`status='failed'` 记账本，下一轮自动重试；3001 记 `missing` 不再重试。
 - 手机不可达/Token 变更/权限被关/能力关闭：probe 与 sync 都返回对应中文提示，不产生批次。
+- 删除：在 iphoto 删除（软删或清空回收站）不会修改账本；后续同步按账本跳过，不会把图「找回来」。需要找回时使用「忘记设备」重置后重新同步。
 - 开发/验收小规模：环境变量 `IPHOTO_PHONE_ITEM_LIMIT=N` 让图片与视频**各**只处理前 N 项，且**不推进 checkpoint**（避免把截断误判为已同步）。
 
 ---

@@ -681,3 +681,70 @@ func TestPhoneStartRejectsBadInput(t *testing.T) {
 		t.Fatal("非法 mode 应失败")
 	}
 }
+
+// TestPhoneDeletedAssetNotReimported 固化「删除语义以 PC 为准」：
+// 已同步的手机媒体即使库内资产被彻底删除，全量重扫也不应重新下载/导入；
+// 只有「忘记设备」这个显式重置入口才会重新导入。
+func TestPhoneDeletedAssetNotReimported(t *testing.T) {
+	fp := newFakePhone(t, "2179")
+	srv := newPhoneServer(t, fp)
+	fp.add(phonedock.KindImage, 80, "keep.png", pngBytes(t, color.RGBA{R: 5, A: 255}), 1, 1700000000)
+
+	m, st, _ := newPhoneTestManager(t)
+	ctx := context.Background()
+
+	batch1, err := m.StartPhone(PhoneOptions{Address: srv.URL, Token: "2179"})
+	if err != nil {
+		t.Fatalf("StartPhone: %v", err)
+	}
+	if snap := waitDone(t, m, batch1); snap.Imported != 1 {
+		t.Fatalf("首轮统计不符: %+v", snap)
+	}
+
+	assets, err := st.ListAssets(ctx, store.AssetFilter{})
+	if err != nil || assets.Total != 1 {
+		t.Fatalf("首轮后资产 = %d, %v", assets.Total, err)
+	}
+	// 模拟「删除图片 + 清空回收站」：资产行被彻底删除。
+	if err := st.DeleteAssetRow(ctx, assets.Items[0].Hash); err != nil {
+		t.Fatalf("DeleteAssetRow: %v", err)
+	}
+
+	before := fp.downloadCount()
+	batch2, err := m.StartPhone(PhoneOptions{Address: srv.URL, Mode: PhoneModeFull})
+	if err != nil {
+		t.Fatalf("全量重扫: %v", err)
+	}
+	snap2 := waitDone(t, m, batch2)
+	if snap2.Status != "done" || snap2.Total != 1 || snap2.Unchanged != 1 || snap2.Imported != 0 {
+		t.Fatalf("删除后全量重扫不应重新导入: %+v", snap2)
+	}
+	if fp.downloadCount() != before {
+		t.Fatalf("删除后全量重扫不应重新下载: %d → %d", before, fp.downloadCount())
+	}
+	if assets, err = st.ListAssets(ctx, store.AssetFilter{}); err != nil || assets.Total != 0 {
+		t.Fatalf("删除后资产应为 0，得到 %d, %v", assets.Total, err)
+	}
+
+	devices, err := st.ListPhoneDevices(ctx)
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("设备列表 = %+v, %v", devices, err)
+	}
+	ledger, err := st.ListPhoneMedia(ctx, devices[0].ID)
+	if err != nil || len(ledger) != 1 || ledger[0].Status != store.PhoneMediaSynced {
+		t.Fatalf("账本应保留 synced 记录: %+v, %v", ledger, err)
+	}
+
+	// 「忘记设备」是显式重置：删除账本后重新全量，会重新导入。
+	if err := st.DeletePhoneDevice(ctx, devices[0].ID); err != nil {
+		t.Fatalf("DeletePhoneDevice: %v", err)
+	}
+	batch3, err := m.StartPhone(PhoneOptions{Address: srv.URL, Token: "2179"})
+	if err != nil {
+		t.Fatalf("重置后 StartPhone: %v", err)
+	}
+	snap3 := waitDone(t, m, batch3)
+	if snap3.Status != "done" || snap3.Imported != 1 {
+		t.Fatalf("忘记设备后应重新导入: %+v", snap3)
+	}
+}

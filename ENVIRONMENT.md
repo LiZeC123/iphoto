@@ -198,7 +198,8 @@ go vet ./...                PASS
 go test ./...               PASS（新增 phonedock 客户端、store 设备/账本与 v2→v3 迁移、
                              importer 手机同步等用例：首轮全量、增量免下载、账本命中、
                              自动跳过重复内容、类型不支持、3001/传输中断与失败重试、
-                             取消不推进 checkpoint、probe 不写库、换地址续接同一设备）
+                             取消不推进 checkpoint、probe 不写库、换地址续接同一设备、
+                             删除后全量重扫不重导（删除以 PC 为准）、忘记设备作为重置入口会重新导入）
 npm run typecheck           PASS
 npm run build               PASS
 ```

@@ -107,7 +107,12 @@ async function syncDevice(device: PhoneDevice, mode: PhoneSyncMode): Promise<voi
 }
 
 async function forgetDevice(device: PhoneDevice): Promise<void> {
-  if (!window.confirm(`忘记设备「${device.name}」？只删除同步记录，库内图片不受影响；下次连接将重新全量读取。`)) {
+  if (
+    !window.confirm(
+      `忘记设备「${device.name}」？\n\n这是显式重置：会删除该手机的同步记录（含 Token）与账本，` +
+        `下次连接将重新导入手机上的全部图片（包括已在 iphoto 删除的）。\n库内已有图片本身不受影响。`,
+    )
+  ) {
     return
   }
   try {
@@ -155,6 +160,7 @@ onMounted(loadDevices)
     <p class="hint dim">
       在手机 PhoneDock 首页可以看到地址与 4 位 Token。检查通过后才会开始下载；
       同一台手机（按厂商 + 型号识别）第二次起只拉新增与变更，Token 已保存时可留空。
+      同步过一次的图片，之后在 iphoto 删除（含清空回收站）不会再被重新导入，以 PC 端的删除为准。
     </p>
 
     <div v-if="probe" class="probe-card">
@@ -276,7 +282,11 @@ onMounted(loadDevices)
     </table>
     <p class="hint dim">
       手机换了 IP 时，上面的「增量同步」会连不上：请在上方填新地址与 Token 重新检查，同一台手机会沿用上次进度。
-      忘记设备只清同步记录（含 Token），不会删除已入库的图片。
+    </p>
+    <p class="hint dim">
+      <strong>「忘记」是显式重置入口</strong>：会删除该手机的同步记录（含 Token）与同步账本，
+      下次连接将重新导入手机上的<strong>全部</strong>图片——包括你已在 iphoto 删除的图片；
+      库内已有图片本身不受影响。只想补新图时不要点它。
     </p>
   </section>
 </template>
