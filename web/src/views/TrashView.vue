@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { errorMessage } from '@/api/settings'
 import { trashApi } from '@/api/trash'
 import type { Asset } from '@/api/types'
+import AssetGrid from '@/components/AssetGrid.vue'
 import PageShell from '@/components/PageShell.vue'
-import { formatBytes, formatDate } from '@/utils/format'
 
 const items = ref<Asset[]>([])
 const total = ref(0)
@@ -16,9 +16,8 @@ const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 const selected = ref(new Set<string>())
-const sentinel = ref<HTMLElement | null>(null)
-
-let observer: IntersectionObserver | undefined
+// Shift 连选的锚点（当前已加载列表里的下标）。
+const anchor = ref<number | null>(null)
 
 const selectedCount = computed(() => selected.value.size)
 const loadedAll = computed(() => items.value.length >= total.value)
@@ -32,7 +31,10 @@ async function load(reset = true): Promise<void> {
     items.value = reset ? data.items : [...items.value, ...data.items]
     total.value = data.total
     page.value = nextPage
-    if (reset) selected.value = new Set()
+    if (reset) {
+      selected.value = new Set()
+      anchor.value = null
+    }
   } catch (err) {
     error.value = errorMessage(err)
   } finally {
@@ -45,19 +47,32 @@ function loadMore(): void {
   void load(false)
 }
 
-function toggle(hash: string): void {
+/** 点击卡片切换选中；按住 Shift 连选一段（与图库页一致）。 */
+function onPick(payload: { hash: string; index: number; shift: boolean }): void {
   const next = new Set(selected.value)
-  if (next.has(hash)) next.delete(hash)
-  else next.add(hash)
+  if (payload.shift && anchor.value !== null) {
+    const start = Math.min(anchor.value, payload.index)
+    const end = Math.max(anchor.value, payload.index)
+    for (let i = start; i <= end; i += 1) {
+      const item = items.value[i]
+      if (item) next.add(item.hash)
+    }
+  } else {
+    if (next.has(payload.hash)) next.delete(payload.hash)
+    else next.add(payload.hash)
+    anchor.value = payload.index
+  }
   selected.value = next
 }
 
 function selectAll(): void {
   selected.value = new Set(items.value.map((item) => item.hash))
+  anchor.value = null
 }
 
 function clearSelection(): void {
   selected.value = new Set()
+  anchor.value = null
 }
 
 async function restore(hashes: string[]): Promise<void> {
@@ -95,17 +110,6 @@ async function emptyTrash(): Promise<void> {
 
 onMounted(() => {
   void load()
-  observer = new IntersectionObserver(
-    (entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) loadMore()
-    },
-    { rootMargin: '240px' },
-  )
-  if (sentinel.value) observer.observe(sentinel.value)
-})
-
-onBeforeUnmount(() => {
-  observer?.disconnect()
 })
 </script>
 
@@ -115,52 +119,39 @@ onBeforeUnmount(() => {
       <button class="btn" :disabled="busy || !selectedCount" @click="restore([...selected])">
         {{ busy ? '处理中…' : `恢复所选（${selectedCount}）` }}
       </button>
-      <button class="btn" :disabled="busy" @click="selectAll">全选</button>
+      <button class="btn" :disabled="busy || !items.length" @click="selectAll">全选</button>
       <button class="btn" :disabled="!selectedCount" @click="clearSelection">清空选择</button>
       <button class="btn btn-danger" :disabled="busy || !total" @click="emptyTrash">清空回收站</button>
       <button class="btn" :disabled="loading" @click="load(true)">刷新</button>
+      <span class="dim selection-tip">点击缩略图选择，按住 Shift 连选</span>
     </div>
 
     <p v-if="error" class="banner error">{{ error }}</p>
     <p v-if="notice" class="banner">{{ notice }}</p>
 
-    <table v-if="items.length" class="data-table panel">
-      <thead>
-        <tr>
-          <th class="check-col"></th>
-          <th>文件名</th>
-          <th>删除时间</th>
-          <th>大小</th>
-          <th class="actions-col">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="asset in items" :key="asset.hash">
-          <td class="check-col">
-            <input
-              type="checkbox"
-              :checked="selected.has(asset.hash)"
-              @change="toggle(asset.hash)"
-            />
-          </td>
-          <td>
-            <span class="ellipsis" :title="asset.original_name">{{ asset.original_name }}</span>
-          </td>
-          <td class="dim">{{ formatDate(asset.deleted_at) }}</td>
-          <td class="dim">{{ formatBytes(asset.size) }}</td>
-          <td class="actions">
-            <button class="btn btn-sm" :disabled="busy" @click="restore([asset.hash])">恢复</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <AssetGrid
+      :items="items"
+      selectable
+      :selected="selected"
+      meta="deleted"
+      @pick="onPick"
+      @load-more="loadMore"
+    >
+      <template #empty>
+        <div v-if="!loading" class="empty">
+          <strong>回收站是空的</strong>
+          <p>删除的图片会先放在这里，可随时恢复。</p>
+        </div>
+      </template>
 
-    <div v-else-if="!loading" class="empty">
-      <strong>回收站是空的</strong>
-      <p>删除的图片会先放在这里，可随时恢复。</p>
-    </div>
+<style scoped>
+.selection-tip {
+  font-size: 13px;
+}
+</style>
+    </AssetGrid>
 
-    <div ref="sentinel" class="load-more">
+    <div class="load-more">
       <span v-if="loading" class="dim">加载中…</span>
       <span v-else-if="items.length && !loadedAll" class="dim">
         继续向下滚动自动加载（已显示 {{ items.length }}/{{ total }}）
@@ -171,15 +162,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.check-col {
-  width: 36px;
-}
-
-.actions-col {
-  width: 100px;
-}
-
-.data-table.panel {
-  padding: 6px 10px;
+.selection-tip {
+  font-size: 13px;
 }
 </style>

@@ -5,7 +5,7 @@ import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 
 import type { Asset } from '@/api/types'
 import AssetThumb from '@/components/AssetThumb.vue'
-import { formatDate } from '@/utils/format'
+import { formatBytes, formatDate } from '@/utils/format'
 import { isVideoAsset } from '@/utils/media'
 
 const props = withDefaults(
@@ -14,11 +14,14 @@ const props = withDefaults(
     minColumnWidth?: number
     selectable?: boolean
     selected?: Set<string>
+    /** 卡片第二行内容：taken 显示拍摄时间，deleted 显示删除时间与大小（回收站用）。 */
+    meta?: 'taken' | 'deleted'
   }>(),
   {
     minColumnWidth: 168,
     selectable: false,
     selected: () => new Set<string>(),
+    meta: 'taken',
   },
 )
 const emit = defineEmits<{
@@ -159,6 +162,14 @@ interface Cell {
   index: number
 }
 
+function metaText(asset: Asset): string {
+  if (props.meta === 'deleted') {
+    const deletedAt = asset.deleted_at ? formatDate(asset.deleted_at) : '未知删除时间'
+    return `${deletedAt} · ${formatBytes(asset.size)}`
+  }
+  return formatDate(asset.taken_at)
+}
+
 function activate(cell: Cell, event: MouseEvent): void {
   if (props.selectable) emit('pick', { hash: cell.asset.hash, index: cell.index, shift: event.shiftKey })
   else emit('open', cell.index)
@@ -210,7 +221,10 @@ const rows = computed<Row[]>(() => {
             :key="cell.asset.hash"
             type="button"
             class="asset-card"
-            :class="{ selected: selectable && selected.has(cell.asset.hash) }"
+            :class="{
+              selected: selectable && selected.has(cell.asset.hash),
+              selectable,
+            }"
             @click="activate(cell, $event)"
           >
             <span v-if="selectable" class="select-dot" :class="{ on: selected.has(cell.asset.hash) }">
@@ -224,7 +238,7 @@ const rows = computed<Row[]>(() => {
             />
             <span class="asset-meta">
               <strong :title="cell.asset.original_name">{{ cell.asset.original_name }}</strong>
-              <span>{{ formatDate(cell.asset.taken_at) }}</span>
+              <span>{{ metaText(cell.asset) }}</span>
             </span>
           </button>
         </div>
@@ -286,6 +300,10 @@ const rows = computed<Row[]>(() => {
   position: relative;
 }
 
+.asset-card.selectable {
+  cursor: pointer;
+}
+
 .select-dot {
   position: absolute;
   top: 8px;
@@ -345,12 +363,16 @@ const rows = computed<Row[]>(() => {
   object-fit: cover;
 }
 
-.asset-meta strong {
+.asset-meta strong,
+.asset-meta span {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-meta strong {
   color: var(--text);
   font-size: 13px;
   font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 </style>
