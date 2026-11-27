@@ -224,6 +224,76 @@ npm run build               PASS
 
 完整 502 MB 全量同步（109 图 + 6 视频，验证 checkpoint 推进与大文件续传）待用户确认后再跑。
 
+### 3.8 AVIF / HEIC 支持复验（2026-11-28）
+
+新增纯 Go 解码依赖（无 CGo、无第三方传递依赖）：
+
+```text
+github.com/gen2brain/gav1d  v0.2.10   AVIF 解码（BSD-2 + AV1 专利许可）
+github.com/gen2brain/h265   v0.2.7    HEIC 解码（MIT + HEVC 专利提示）
+```
+
+```text
+gofmt -l cmd internal web   无输出
+go vet ./...                PASS
+go test ./...               PASS（新增 media 的 AVIF/HEIC 尺寸、容器 Exif 时间、
+                             384 缩略图、2560 预览、10bit 用例；importer 的
+                             .avif/.heic/.heif 全流程入库与不支持报告用例）
+npm run typecheck           PASS
+npm run build               PASS
+make build                  PASS
+make release                PASS（darwin arm64/amd64、linux amd64、windows amd64）
+```
+
+本机实测（darwin/arm64，4032×3024 样本，样本由两库自带编码器在测试/探针中生成）：
+
+| 操作 | 耗时 |
+|---|---|
+| HEIC `DecodeConfig`（只读头，导入探测用） | 31µs |
+| HEIC `Decode`（12MP） | 107ms |
+| AVIF `Decode`（12MP） | 35ms |
+| 384px 缩略图（解码后 fit + JPEG） | 18ms |
+
+体积（`-s -w`，含前端）：
+
+| 产物 | 大小 |
+|---|---|
+| `bin/iphoto`（darwin/arm64，改动前 12,614,818 B） | 14,584,578 B（**+1.9MB**） |
+| `dist/iphoto-darwin-amd64` | 15,709,584 B |
+| `dist/iphoto-linux-amd64` | 15,610,016 B |
+| `dist/iphoto-windows-amd64.exe` | 15,775,744 B |
+
+说明：测试夹具（HEIC 8/10bit、AVIF）由 `heic.Encode` / `avif.Encode` 在测试内现场生成，仓库不提交二进制图片；浏览器 UI（HEIC 查看器走 `/preview`、AVIF 走原图）由用户在重启服务后验收。
+
+### 3.9 竖拍 HEIC 显示为横向的修复（2026-11-28）
+
+现象：导入 `greyhounds-looking-for-a-table.heic`（iPhone 竖拍）后网格与查看器仍是横向。
+
+根因：
+
+- 文件的容器里有 `irot`（angle=1，90° 逆时针），EXIF Orientation=8，`ispe` 为 4032×3024；
+- 两个解码库的 `Options.AutoRotate` 默认是 **false**，而 `image.RegisterFormat` 的包装器调用 `Decode` 时不带选项 —— 所以 `imaging.Open`（缩略图/预览入口）拿到的始终是未旋转的像素（4032×3024）；
+- 因此旧缩略图 384×288、预览 2560×1920，`assets.width/height` 也停留在旋转前的 4032×3024。
+
+修复：
+
+- `media.loadForRender` 按 `image.DecodeConfig` 识别出的真实格式分派：AVIF/HEIC 显式 `Options{AutoRotate: true}`，其它格式继续走 imaging 的 EXIF 自动转正；缩略图与预览共用这条路径。
+- `media.Inspect` 对 AVIF/HEIC 额外解码一次（`AutoRotate`）取转正后的显示尺寸，导入完成时 `assets.width/height` 就是对的。
+
+验证（真实样本，arm64）：
+
+```text
+Inspect            3024x4032（修复前 4032x3024），taken_at=2023-09-28 09:44:03
+GenerateThumbnail  显示尺寸 3024x4032，缩略图 288x384
+GeneratePreview    预览 1920x2560（源 3024x4032）
+go vet ./...  PASS
+go test ./... PASS（新增 thumbs 尺寸回调、store 按 MIME 查询与尺寸回写、
+                  maintenance 一次性修复用例，media 尺寸断言）
+npm run typecheck / npm run build  PASS
+```
+
+注意：`/thumb` 与 `/preview` 以哈希命名并以 `Cache-Control: immutable` 长期缓存，浏览器不会因服务端文件重建而失效——解码/缩略图逻辑变更后需要清一次浏览器缓存（本次即为此情况，代码不再自动处理缓存失效）。
+
 ## 4. 操作步骤
 
 ```bash

@@ -10,7 +10,7 @@ import { tagsApi } from '@/api/tags'
 import type { Asset } from '@/api/types'
 import TagSelector from '@/components/TagSelector.vue'
 import { formatBytes, formatDate } from '@/utils/format'
-import { isVideoAsset } from '@/utils/media'
+import { isVideoAsset, needsDisplayProxy } from '@/utils/media'
 
 const props = defineProps<{ assets: Asset[]; startIndex: number; open: boolean }>()
 const emit = defineEmits<{
@@ -115,8 +115,8 @@ function openViewer(index = props.startIndex): void {
       }
     }
     return {
-      // TIFF 浏览器无法直接显示，改读服务端生成的 JPEG 预览；其它格式仍读原图。
-      src: asset.mime === 'image/tiff' ? assetsApi.previewUrl(asset.hash) : assetsApi.fileUrl(asset.hash),
+      // TIFF/HEIC 浏览器无法直接显示，改读服务端生成的 JPEG 预览；其它格式仍读原图。
+      src: needsDisplayProxy(asset) ? assetsApi.previewUrl(asset.hash) : assetsApi.fileUrl(asset.hash),
       msrc: assetsApi.thumbUrl(asset.hash),
       ...slideSize(asset),
       alt: asset.original_name,
@@ -207,7 +207,7 @@ function slideSize(asset: Asset): { width: number; height: number } {
   }
   let width = asset.width ?? 1600
   let height = asset.height ?? 1200
-  if (asset.mime === 'image/tiff') {
+  if (needsDisplayProxy(asset)) {
     const scale = Math.min(1, PREVIEW_LONG_EDGE / Math.max(width, height))
     if (scale < 1) {
       width = Math.max(1, Math.round(width * scale))

@@ -258,9 +258,9 @@ onBeforeUnmount(clearTimer)
       <TagSelector id="import-tags" v-model="importTags" placeholder="选择或输入标签，导入完成后统一添加" />
 
       <p class="hint dim">
-        支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff 与 mp4 视频，递归所有子目录；跳过隐藏文件与符号链接。源文件只读，不移动、不改名、不删除。
+        支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff/avif/heic/heif 与 mp4 视频，递归所有子目录；跳过隐藏文件与符号链接。源文件只读，不移动、不改名、不删除。
         mp4 会原样入库并可在详情页播放；缩略图需要系统安装 ffmpeg（未安装时显示 ▶ 占位，不影响播放）。
-        动图 WebP 可导入和查看，但暂时不会生成网格缩略图；标签只会添加到本次新导入的文件。
+        动图 WebP 可导入和查看，但暂时不会生成网格缩略图；HEIC/HEIF 在查看器中由服务端转成 JPEG 预览（AVIF 浏览器原生支持）；标签只会添加到本次新导入的文件。
       </p>
     </section>
 

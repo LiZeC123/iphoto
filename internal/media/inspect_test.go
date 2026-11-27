@@ -15,9 +15,10 @@ import (
 
 func TestIsSupportedAndMIME(t *testing.T) {
 	supported := []string{
-		"a.jpg", "a.JPEG", "a.png", "a.gif", "a.webp", "a.bmp", "a.tif", "a.TIFF", "clip.mp4", "clip.MP4",
+		"a.jpg", "a.JPEG", "a.png", "a.gif", "a.webp", "a.bmp", "a.tif", "a.TIFF",
+		"a.avif", "a.AVIF", "a.heic", "a.HEIC", "a.heif", "clip.mp4", "clip.MP4",
 	}
-	unsupported := []string{"a.avif", "a.heic", "a.mkv", "a.mov", "a.txt", "a"}
+	unsupported := []string{"a.mkv", "a.mov", "a.raw", "a.txt", "a"}
 	for _, name := range supported {
 		if !IsSupported(name) {
 			t.Errorf("IsSupported(%q) = false, want true", name)
@@ -36,6 +37,7 @@ func TestIsSupportedAndMIME(t *testing.T) {
 		"a.jpg": "image/jpeg", "a.jpeg": "image/jpeg", "a.png": "image/png",
 		"a.gif": "image/gif", "a.webp": "image/webp", "a.bmp": "image/bmp",
 		"a.tif": "image/tiff", "a.tiff": "image/tiff", "a.mp4": "video/mp4",
+		"a.avif": "image/avif", "a.heic": "image/heic", "a.heif": "image/heic",
 	}
 	for name, want := range mimes {
 		if got := MIMEOf(name); got != want {
@@ -45,6 +47,12 @@ func TestIsSupportedAndMIME(t *testing.T) {
 
 	if !NeedsDisplayProxy("image/tiff") {
 		t.Error("TIFF 应需要 JPEG 预览代理")
+	}
+	if !NeedsDisplayProxy("image/heic") || !NeedsDisplayProxy("image/heif") {
+		t.Error("HEIC/HEIF 应需要 JPEG 预览代理")
+	}
+	if NeedsDisplayProxy("image/avif") {
+		t.Error("AVIF 主流浏览器可直显，不应走预览代理")
 	}
 	if NeedsDisplayProxy("image/webp") || NeedsDisplayProxy("image/gif") {
 		t.Error("浏览器可直显的格式不应走预览代理")

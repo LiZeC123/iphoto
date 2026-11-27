@@ -410,7 +410,7 @@ func TestPhoneSyncAutoSkipsDuplicateContent(t *testing.T) {
 func TestPhoneUnsupportedNotDownloaded(t *testing.T) {
 	fp := newFakePhone(t, "2179")
 	srv := newPhoneServer(t, fp)
-	fp.add(phonedock.KindImage, 20, "IMG_0001.HEIC", []byte("heic-bytes"), 5, 1700000000)
+	fp.add(phonedock.KindImage, 20, "IMG_0001.DNG", []byte("dng-bytes"), 5, 1700000000)
 	fp.add(phonedock.KindImage, 21, "ok.png", pngBytes(t, color.RGBA{R: 9, A: 255}), 6, 1700000001)
 
 	m, st, _ := newPhoneTestManager(t)
@@ -425,7 +425,7 @@ func TestPhoneUnsupportedNotDownloaded(t *testing.T) {
 	if snap.Unsupported.Total != 1 || snap.Total != 1 || snap.Imported != 1 {
 		t.Fatalf("统计不符: %+v", snap)
 	}
-	if len(snap.Unsupported.ByExt) != 1 || snap.Unsupported.ByExt[0].Ext != ".heic" {
+	if len(snap.Unsupported.ByExt) != 1 || snap.Unsupported.ByExt[0].Ext != ".dng" {
 		t.Fatalf("后缀统计不符: %+v", snap.Unsupported)
 	}
 	if fp.downloadCount() != 1 {

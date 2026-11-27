@@ -25,7 +25,7 @@
 - 人脸识别、OCR、语义搜索、以图搜图。
 - 相似图检测（感知哈希）；只做完全重复（SHA-256 相同）。
 - 评分、收藏、颜色标记。
-- RAW、HEIC、AVIF、MKV/AVI 等格式；当前支持 JPG/JPEG/PNG/GIF/WebP(静态)/BMP/TIF/TIFF 与 MP4（视频只存原文件，可在查看器播放），其它格式仍走「不支持」报告。
+- RAW、MKV/AVI 等格式；当前支持 JPG/JPEG/PNG/GIF/WebP(静态)/BMP/TIF/TIFF/AVIF/HEIC/HEIF 与 MP4（视频只存原文件，可在查看器播放），其它格式仍走「不支持」报告。
 - 图片编辑（裁剪、旋转、滤镜）。
 - 自动清理回收站；回收站由用户手动清空。
 - 系统托盘、Windows 服务、开机自启。
@@ -302,7 +302,7 @@ CREATE TABLE asset_signatures (
 ### 5.2 递归扫描
 
 - 递归遍历源目录**所有子目录**，不限制层级。
-- 过滤支持的扩展名：`.jpg .jpeg .png .gif .webp .bmp .tif .tiff .mp4`（大小写不敏感；WebP 仅静态图有缩略图；MP4 只存原文件）。
+- 过滤支持的扩展名：`.jpg .jpeg .png .gif .webp .bmp .tif .tiff .avif .heic .heif .mp4`（大小写不敏感；WebP 仅静态图有缩略图；AVIF/HEIC 由纯 Go 解码库解码，见第 22 章；MP4 只存原文件）。
 - 跳过隐藏文件、系统文件、符号链接（避免循环）。
 - 扫描结果先去重（同一路径只处理一次），再进入导入。
 - **不支持的文件必须显式报告**：统计总数、按后缀（含「无后缀」）计数，并列出最多 100 个相对路径；扫描接口与导入进度/批次统计都返回该信息，CSV 报告也会追加 `unsupported` 行，避免文件被静默忽略。
@@ -349,10 +349,13 @@ CREATE TABLE asset_signatures (
 - 网格只加载缩略图；缩略图不存在时显示占位符并触发排队；生成失败（损坏文件、动图 WebP）在本次运行内不再重试，网格显示「无缩略图」。
 - 缩略图可删除重建，不参与备份。
 - EXIF Orientation 在缩略图阶段转正，不改原图。
-- 大图查看读 `library/blobs` 原图；TIFF 浏览器无法直接渲染，查看器改读 `runtime/previews/ab/cd/<hash>.jpg`（长边 2560、质量 85，首次请求时生成并缓存）。
+- 大图查看读 `library/blobs` 原图；TIFF 与 HEIC/HEIF 浏览器无法直接渲染，查看器改读 `runtime/previews/ab/cd/<hash>.jpg`（长边 2560、质量 85，首次请求时生成并缓存）；AVIF 主流浏览器原生支持，直接读原图。
 - 预览图同样是可删除重建的派生数据，不参与备份。
+- 派生图以内容哈希命名，响应带 `Cache-Control: public, max-age=31536000, immutable`：解码/缩略图逻辑变更后，浏览器仍会命中旧图，需要用户清一次缓存（或后续在 URL 上加派生版本参数）。
 - MP4 视频：不在导入时转码，原文件进 CAS；缩略图由 `ffmpeg` 从 **已入库的 blob** 抽一帧（0.5s 处，失败回退第一帧）生成 384px JPEG。ffmpeg 是可选依赖：未安装时视频仍可导入/播放，网格显示「▶ 视频」占位。
 - TIFF 由 `golang.org/x/image/tiff` 解码；个别压缩方式（如 JPEG-in-TIFF）暂不支持，这类文件仍可导入，但缩略图/预览会失败（网格显示「暂无缩略图」）。
+- AVIF/HEIC 由 `gen2brain/gav1d` 与 `gen2brain/h265` 解码（纯 Go，import 后注册到 `image` 包）；10/12bit 解码为 `image.NRGBA64`，`imaging` 支持缩放后统一编码为 JPEG。
+- 方向：图片缩略图/预览生成时解码原图并应用方向（其它格式走 imaging 的 EXIF 自动转正，AVIF/HEIC 走容器的 `irot/imir`）；AVIF/HEIC 在导入探测阶段也会解码一次取显示尺寸，随后把转正后的真实宽高回写到 `assets.width/height`。
 
 ---
 
@@ -367,6 +370,8 @@ CREATE TABLE asset_signatures (
 5. 导入时间，兜底。
 
 结果存 `taken_at` 和 `taken_at_source`。解析失败不阻塞导入，`taken_at` 可空，UI 归“未知时间”。时间按本地时间存，不做时区转换。
+
+AVIF/HEIC 的 EXIF 在容器里，由 `avif.DecodeExif` / `heic.DecodeExif` 读取，优先级同样是 `DateTimeOriginal → DateTime`（容器 Exif 没有 `DateTimeDigitized` 这一档），`taken_at_source` 仍记 `exif:<tag>`。
 
 ---
 
@@ -571,7 +576,7 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
    - 列表首项固定为「未标记任何标签」，点击跳到图库的 `untagged=1` 筛选，便于排查漏标图片。
 6. **导入页**
    - 路径输入框（记住上次）、扫描预览（含递归统计与不支持文件明细）、开始导入、进度条、重复对比列表、报告导出。
-   - 提示当前支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff 与 mp4，以及「动图 WebP 暂无缩略图」「mp4 缩略图需要 ffmpeg」的限制。
+   - 提示当前支持 jpg/jpeg/png/gif/webp/bmp/tif/tiff/avif/heic/heif 与 mp4，以及「动图 WebP 暂无缩略图」「mp4 缩略图需要 ffmpeg」「HEIC 预览由服务端转 JPEG」的限制。
 7. **回收站页**
    - 网格（复用图库的虚拟滚动与触底加载），卡片显示缩略图、文件名、「删除时间 · 大小」；点击选中、Shift 连选，工具栏恢复所选、全选、清空选择、清空回收站。
    - 缩略图沿用按哈希缓存的 384px JPEG（删除不移除缩略图），缺失时显示占位。
@@ -592,7 +597,7 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
    - 侧栏显示文件名、路径、尺寸、时间、标签编辑、描述编辑。
    - 支持重命名（同步数据库与库内文件，扩展名不可修改）、在系统文件浏览器中显示所在目录。
    - 删除后自动切到下一张；已是最后一张时退出查看器。
-   - TIFF 等浏览器无法直显的格式：`GET /api/assets/{hash}/preview` 返回服务端生成的 JPEG 预览图。
+   - TIFF/HEIC 等浏览器无法直显的格式：`GET /api/assets/{hash}/preview` 返回服务端生成的 JPEG 预览图（AVIF 直读原图）。
    - MP4 视频：slide 使用 `<video controls playsinline>`（PhotoSwipe 的 html 内容），沿用 `/file` 的 Range 拖动；切换/关闭时暂停；视频模式下隐藏缩放按钮并关闭垂直拖拽/方向键翻页，避免与原生控件冲突。
 
 ### 12.2 状态管理
@@ -718,7 +723,7 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
 9. **时间解析可配置**：内置常见规则 + 用户自定义正则，测试功能必备。
 10. **智能相册规则可扩展**：AST 保留 `or`/`not`，第一版只实现 `and` + `tag` + `time_range`。
 11. **前端不引重型 UI 框架**：只引 PhotoSwipe 和虚拟滚动库。
-12. **Go 纯依赖**：SQLite 用 `modernc.org/sqlite`，图像处理避免 CGO，保证单二进制跨平台。
+12. **Go 纯依赖**：SQLite 用 `modernc.org/sqlite`；AVIF/HEIC 解码用 `gen2brain/gav1d`、`gen2brain/h265`；图像处理避免 CGO，保证单二进制跨平台。
 13. **递归导入**：扫描源目录时递归所有子目录，跳过符号链接和隐藏文件。
 14. **日志**：关键操作写 `runtime/logs/app.log`，滚动保留最近 10MB。
 15. **错误提示**：API 错误返回可读消息，前端 toast 展示；导入失败逐条记录，不整体回滚。
@@ -729,7 +734,7 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
 
 ## 18. 开发时确认的细节（不阻塞开工）
 
-- 已支持 GIF/WebP(静态)/BMP/TIFF 与 MP4 视频；动图 WebP 因 `x/image/webp` 不支持动图解码，暂不生成缩略图（查看器仍可播放）。AVIF/HEIC 待后续阶段；MKV/AVI 等其它视频容器暂不支持。
+- 已支持 GIF/WebP(静态)/BMP/TIFF/AVIF/HEIC/HEIF 与 MP4 视频；动图 WebP 因 `x/image/webp` 不支持动图解码，暂不生成缩略图（查看器仍可播放）；MKV/AVI 等其它视频容器暂不支持。
 - 普通相册封面：第一版自动取第一张，手动设置放 P1。
 - 标签合并：P1。
 - 导出任务进度：P1 可同步等待，P2 再做后台任务。
@@ -805,7 +810,7 @@ SQL 用 `LIKE '%kw%'`（转义 `%`/`_`/`\`），`EXISTS` 子查询匹配标签�
 
 - 目标：在导入页填手机地址 + 4 位 Token，把手机相册增量拉进 `library/`；新设备从头读，老设备按上次进度续接。
 - 手机侧**只读**：不修改、不删除手机内容；手机删图不会删 iphoto 的图（不做双向同步）。
-- 不做：定时自动同步、断点续传（PhoneDock v1 不支持 Range）、手机端删除对账、HEIC/MOV 等新格式（仍按「类型不支持」显式报告）。
+- 不做：定时自动同步、断点续传（PhoneDock v1 不支持 Range）、手机端删除对账、MOV/RAW 等其余格式（仍按「类型不支持」显式报告；AVIF/HEIC 已在第 22 章支持）。
 - 下载**串行**：PhoneDock 的原文件接口有传输锁（同一时刻只允许一个全文件读取），并发只会互相等待。
 
 ### 21.2 设备识别
@@ -927,6 +932,54 @@ POST /api/phone/sync
 - 手机不可达/Token 变更/权限被关/能力关闭：probe 与 sync 都返回对应中文提示，不产生批次。
 - 删除：在 iphoto 删除（软删或清空回收站）不会修改账本；后续同步按账本跳过，不会把图「找回来」。需要找回时使用「忘记设备」重置后重新同步。
 - 开发/验收小规模：环境变量 `IPHOTO_PHONE_ITEM_LIMIT=N` 让图片与视频**各**只处理前 N 项，且**不推进 checkpoint**（避免把截断误判为已同步）。
+
+---
+
+## 22. AVIF 与 HEIC
+
+### 22.1 范围
+
+- 支持 `.avif`、`.heic`、`.heif` 导入：与现有格式共用哈希去重、CAS、缩略图、回收站、导出、完整性校验；**原文件原样入库，不转码**。
+- 不支持：HEIC 图像序列/动图（按主图处理）、AV1 视频、AVIF 编码、RAW、MKV/AVI。
+- 不新增 API、不改 schema；`assets.mime` 为 `image/avif` 或 `image/heic`（`.heif` 也记为 `image/heic`）。
+
+### 22.2 解码与依赖
+
+- `github.com/gen2brain/gav1d`（v0.2.10，BSD-2 + AV1 专利许可）解 AVIF；
+  `github.com/gen2brain/h265`（v0.2.7，MIT + HEVC 专利提示）解 HEIC。
+- 两者都是纯 Go、无 CGO、无第三方依赖；`import` 时调用 `image.RegisterFormat` 注册 `avif`/`heic`，
+  因此现有 `image.DecodeConfig`（探测尺寸）与 `imaging.Open`（缩略图/预览）直接可用。
+- `heic` 会把 MIAF 品牌（`ftypmif1` / `msf1` + compatible `avif`）转发给 AVIF 解码器，两库不会互相抢。
+- 格式以解码器识别的 `format` 为准（不是只看扩展名），内容与扩展名不符也能正确识别 MIME。
+- `make release` 仍用 `CGO_ENABLED=0`，darwin/linux/windows 四个目标已实测可交叉编译；二进制约 +3MB。
+- 许可与专利声明见仓库根目录 `THIRD-PARTY-NOTICES.md`。
+
+### 22.3 MIME 与展示策略
+
+| 格式 | `assets.mime` | 网格 | 查看器 |
+|---|---|---|---|
+| `.avif` | `image/avif` | 384px JPEG 缩略图 | `/api/assets/{hash}/file` 原图（主流浏览器原生支持） |
+| `.heic` / `.heif` | `image/heic` | 384px JPEG 缩略图 | `/api/assets/{hash}/preview`，首次打开时生成 2560px JPEG 并缓存到 `runtime/previews/` |
+
+`media.NeedsDisplayProxy` 对 `image/tiff`、`image/heic`、`image/heif` 返回 true，`/preview` 对其它格式回落原图；前端用同一个判断决定查看器 `src` 与初始尺寸换算（`web/src/utils/media.ts` 的 `needsDisplayProxy`）。
+
+### 22.4 时间、方向与尺寸
+
+- 容器 Exif 由 `avif.DecodeExif` / `heic.DecodeExif` 读取，优先级 `DateTimeOriginal → DateTime`，`taken_at_source` 记 `exif:DateTimeOriginal` / `exif:DateTime`。
+- 方向：两个解码库的 `Options.AutoRotate` **默认为 false**（`image.RegisterFormat` 的包装器调用 `Decode` 时不带选项），所以 `media.loadForRender` 对 AVIF/HEIC 显式传 `Options{AutoRotate: true}` 才会应用容器的 `irot`/`imir`/`clap`；其它格式仍走 `imaging` 的 EXIF 自动转正。**不额外应用 EXIF `Orientation`**，避免二次旋转。
+- 尺寸：`DecodeConfig` 只读 `ispe`（旋转前）尺寸；`Inspect` 对 AVIF/HEIC 会再解码一次（`AutoRotate`）拿到转正后的显示尺寸写入 `assets.width/height`，因此导入完成时尺寸就是对的。其它格式（如带 EXIF 旋转的 JPEG/TIFF）仍是探测尺寸（既有行为）。
+- 已知限制：仅在 EXIF 里写方向、容器无 `irot/imir` 的非标准 HEIC 不会自动转正；带 EXIF 旋转的 JPEG 在缩略图生成前 `assets.width/height` 仍是旋转前值。
+
+### 22.5 失败与降级
+
+- 解码器明确拒绝不支持的 HEVC 特性（README：refused rather than decoded wrongly），该文件按导入失败记录；缩略图队列失败后本次运行不再重试，网格占位。
+- 导入阶段对 AVIF/HEIC 会解码一次以取得显示尺寸（12MP 约 0.1s，arm64），其余格式只读头（几十微秒）；缩略图仍在后台队列生成，不阻塞导入完成。
+- ffmpeg 与这两种格式无关；未安装 ffmpeg 不影响 AVIF/HEIC。
+
+### 22.6 测试
+
+- 夹具由两个库自带的编码器在测试内现场生成（HEIC 8/10bit、AVIF），不提交二进制文件。
+- 覆盖：`Inspect` 尺寸/MIME、容器 Exif 拍摄时间、384px 缩略图、2560px 预览、importer 全流程（扫描 → 入库 → 缩略图 → 不支持报告）。
 
 ---
 

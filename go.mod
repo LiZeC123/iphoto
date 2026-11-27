@@ -4,6 +4,8 @@ go 1.26.0
 
 require (
 	github.com/disintegration/imaging v1.6.2
+	github.com/gen2brain/gav1d v0.2.10
+	github.com/gen2brain/h265 v0.2.7
 	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
 	golang.org/x/image v0.48.0
 	modernc.org/sqlite v1.62.0
