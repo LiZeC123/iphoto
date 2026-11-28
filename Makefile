@@ -57,6 +57,12 @@ release: web-build ## 交叉编译多平台单二进制到 dist/
 	$(ENV) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/iphoto-linux-amd64 ./cmd/app
 	$(ENV) && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/iphoto-windows-amd64.exe ./cmd/app
 
+win: web-build ## 构建 Windows 平台单二进制到 dist/
+	$(ENV) && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/iphoto-windows-amd64.exe ./cmd/app
+
+install-win: ## 安装程序到目标路径
+	cp  dist/iphoto-windows-amd64.exe ~/Pictures/
+
 clean: ## 删除构建产物
 	rm -rf bin
 
