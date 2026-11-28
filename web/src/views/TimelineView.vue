@@ -82,7 +82,7 @@ async function load(reset: boolean): Promise<void> {
     const res = await assetsApi.list({
       from: filter.value,
       to: filter.value,
-      sort: 'taken_at_desc',
+      sort: 'taken_at_asc', // 时间线按照时间升序排列更符合直觉
       page: nextPage,
       page_size: PAGE_SIZE,
     })
